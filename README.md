@@ -100,7 +100,17 @@ Create installer artifacts in `release/`:
 npm run desktop:dist
 ```
 
+Build a specific platform installer:
+
+```bash
+npm run desktop:dist:mac
+npm run desktop:dist:win
+npm run desktop:dist:linux
+```
+
 The packaged desktop app starts its own local API. By default it stores SQLite data in the app user-data folder. To use PostgreSQL from the desktop app, launch it with `BUVO_DATABASE=postgres` and `DATABASE_URL` set in the environment.
+
+Windows uses an NSIS installer and the BUVO `.ico` logo. Because BUVO includes the native `better-sqlite3` module, the most reliable Windows installer should be produced on a Windows build machine or GitHub Actions Windows runner.
 
 ## Report exports
 

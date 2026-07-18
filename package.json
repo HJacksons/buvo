@@ -13,6 +13,9 @@
     "dev:api": "tsx watch server/index.ts",
     "desktop:dev": "concurrently -k \"npm run api\" \"npm run dev -- --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 http://127.0.0.1:8787/api/health && BUVO_ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
     "desktop:dist": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder && npm run rebuild:node-native",
+    "desktop:dist:mac": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac && npm run rebuild:node-native",
+    "desktop:dist:win": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis --x64 && npm run rebuild:node-native",
+    "desktop:dist:linux": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux AppImage --x64 && npm run rebuild:node-native",
     "desktop:pack": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir && npm run rebuild:node-native",
     "build": "tsc -b && vite build && npm run build:server",
     "lint": "oxlint",
@@ -64,7 +67,23 @@
       "identity": null
     },
     "win": {
-      "target": "nsis"
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "oneClick": false,
+      "perMachine": false,
+      "shortcutName": "BUVO POS"
     },
     "linux": {
       "target": "AppImage",
