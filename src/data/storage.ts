@@ -14,23 +14,30 @@ type StoredPayload = {
 }
 
 type LoadResult = {
+  databaseEngine?: 'sqlite' | 'postgres'
   data: AppData
   message: string
+  revision?: number | null
   savedAt: string | null
   source: 'demo' | 'local' | 'legacy'
 }
 
 type SaveResult = {
   ok: boolean
+  databaseEngine?: 'sqlite' | 'postgres'
   message: string
+  revision?: number | null
   savedAt: string | null
-  storage: 'browser' | 'sqlite' | 'unavailable'
+  storage: 'browser' | 'database' | 'unavailable'
 }
 
 type AuthResult = {
   message: string
   user: User | null
 }
+
+let databaseRevision: number | null = null
+let databaseEngine: 'sqlite' | 'postgres' | null = null
 
 const appDataKeys: Array<keyof AppData> = [
   'products',
@@ -193,17 +200,23 @@ export const loadDatabaseData = async (): Promise<LoadResult | null> => {
 
     const payload = (await response.json()) as {
       data?: unknown
+      revision?: number
       savedAt?: string
-      storage?: string
+      storage?: 'sqlite' | 'postgres'
     }
 
     if (!isAppData(payload.data)) {
       return null
     }
 
+    databaseRevision = typeof payload.revision === 'number' ? payload.revision : null
+    databaseEngine = payload.storage ?? 'sqlite'
+
     return {
+      databaseEngine,
       data: normalizeAppData(payload.data),
-      message: 'SQLite database connected.',
+      message: `${databaseEngine === 'postgres' ? 'PostgreSQL' : 'SQLite'} database connected.`,
+      revision: databaseRevision,
       savedAt: payload.savedAt ?? null,
       source: 'local',
     }
@@ -217,6 +230,7 @@ export const savePersistedData = (data: AppData): SaveResult => {
     return {
       ok: false,
       message: 'Storage is not available in this environment.',
+      revision: null,
       savedAt: null,
       storage: 'unavailable',
     }
@@ -229,6 +243,7 @@ export const savePersistedData = (data: AppData): SaveResult => {
     return {
       ok: true,
       message: 'Saved locally on this device.',
+      revision: null,
       savedAt: payload.savedAt,
       storage: 'browser',
     }
@@ -236,6 +251,7 @@ export const savePersistedData = (data: AppData): SaveResult => {
     return {
       ok: false,
       message: 'Could not save locally. Download a backup before closing.',
+      revision: null,
       savedAt: null,
       storage: 'unavailable',
     }
@@ -246,7 +262,8 @@ export const saveDatabaseData = async (data: AppData): Promise<SaveResult> => {
   if (typeof window === 'undefined') {
     return {
       ok: false,
-      message: 'SQLite API is not available in this environment.',
+      message: 'Database API is not available in this environment.',
+      revision: null,
       savedAt: null,
       storage: 'unavailable',
     }
@@ -254,22 +271,43 @@ export const saveDatabaseData = async (data: AppData): Promise<SaveResult> => {
 
   try {
     const response = await fetchWithTimeout(`${API_BASE_URL}/api/store`, {
-      body: JSON.stringify({ data }),
+      body: JSON.stringify({ data, revision: databaseRevision }),
       headers: { 'Content-Type': 'application/json' },
       method: 'PUT',
     })
 
-    if (!response.ok) {
-      throw new Error('SQLite save failed.')
+    if (response.status === 409) {
+      const payload = (await response.json()) as { error?: string }
+
+      return {
+        ok: false,
+        databaseEngine: databaseEngine ?? undefined,
+        message: payload.error ?? 'Store changed on another counter. Reload before saving.',
+        revision: databaseRevision,
+        savedAt: null,
+        storage: 'database',
+      }
     }
 
-    const payload = (await response.json()) as { savedAt?: string }
+    if (!response.ok) {
+      throw new Error('Database save failed.')
+    }
+
+    const payload = (await response.json()) as {
+      revision?: number
+      savedAt?: string
+      storage?: 'sqlite' | 'postgres'
+    }
+    databaseRevision = typeof payload.revision === 'number' ? payload.revision : databaseRevision
+    databaseEngine = payload.storage ?? databaseEngine
 
     return {
       ok: true,
-      message: 'Saved to SQLite database.',
+      databaseEngine: databaseEngine ?? undefined,
+      message: `Saved to ${databaseEngine === 'postgres' ? 'PostgreSQL' : 'SQLite'} database.`,
+      revision: databaseRevision,
       savedAt: payload.savedAt ?? new Date().toISOString(),
-      storage: 'sqlite',
+      storage: 'database',
     }
   } catch {
     const fallback = savePersistedData(data)
@@ -277,8 +315,9 @@ export const saveDatabaseData = async (data: AppData): Promise<SaveResult> => {
     return {
       ok: fallback.ok,
       message: fallback.ok
-        ? 'SQLite unavailable. Saved in browser fallback.'
-        : 'SQLite unavailable and browser fallback failed. Download a backup.',
+        ? 'Database unavailable. Saved in browser fallback.'
+        : 'Database unavailable and browser fallback failed. Download a backup.',
+      revision: null,
       savedAt: fallback.savedAt,
       storage: fallback.ok ? 'browser' : 'unavailable',
     }
@@ -309,12 +348,12 @@ const authenticate = async (
     const payload = (await response.json()) as { user?: User }
 
     return {
-      message: 'Authenticated by SQLite database.',
+      message: 'Authenticated by database.',
       user: payload.user ?? null,
     }
   } catch {
     return {
-      message: 'SQLite auth unavailable.',
+      message: 'Database auth unavailable.',
       user: null,
     }
   }

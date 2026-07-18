@@ -189,7 +189,8 @@ function App() {
   const [data, setData] = useState<AppData>(initialStore.data)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(initialStore.savedAt)
   const [storageStatus, setStorageStatus] = useState(initialStore.message)
-  const [storageMode, setStorageMode] = useState<'browser' | 'sqlite'>('browser')
+  const [storageMode, setStorageMode] = useState<'browser' | 'database'>('browser')
+  const [databaseLabel, setDatabaseLabel] = useState('Database')
   const [isStoreHydrating, setIsStoreHydrating] = useState(true)
   const [sessionUser, setSessionUser] = useState<User | null>(null)
   const [isLocked, setIsLocked] = useState(false)
@@ -271,7 +272,10 @@ function App() {
         setData(databaseStore.data)
         setLastSavedAt(databaseStore.savedAt)
         setStorageStatus(databaseStore.message)
-        setStorageMode('sqlite')
+        setStorageMode('database')
+        setDatabaseLabel(
+          databaseStore.databaseEngine === 'postgres' ? 'PostgreSQL database' : 'SQLite database',
+        )
       } else {
         setStorageMode('browser')
       }
@@ -289,10 +293,17 @@ function App() {
       return
     }
 
-    if (storageMode === 'sqlite') {
+    if (storageMode === 'database') {
       void saveDatabaseData(data).then((saveResult) => {
         setStorageStatus(saveResult.message)
-        setStorageMode(saveResult.storage === 'sqlite' ? 'sqlite' : 'browser')
+        setStorageMode(saveResult.storage === 'database' ? 'database' : 'browser')
+        if (saveResult.databaseEngine) {
+          setDatabaseLabel(
+            saveResult.databaseEngine === 'postgres'
+              ? 'PostgreSQL database'
+              : 'SQLite database',
+          )
+        }
 
         if (saveResult.savedAt) {
           setLastSavedAt(saveResult.savedAt)
@@ -950,7 +961,7 @@ function App() {
     event.preventDefault()
     let user: User | null = null
 
-    if (storageMode === 'sqlite') {
+    if (storageMode === 'database') {
       const authResult = await authenticateDatabaseUser(loginStaffNumber.trim(), loginPin)
       user = authResult.user
     } else {
@@ -959,7 +970,7 @@ function App() {
         null
     }
 
-    if (!user || !user.active || (storageMode !== 'sqlite' && user.pin !== loginPin)) {
+    if (!user || !user.active || (storageMode !== 'database' && user.pin !== loginPin)) {
       setStatus('Incorrect staff number, PIN, or inactive user.')
       return
     }
@@ -1009,7 +1020,7 @@ function App() {
     }
 
     const unlockedUser =
-      storageMode === 'sqlite'
+      storageMode === 'database'
         ? (await unlockDatabaseUser(sessionUser.id, unlockPin)).user
         : sessionUser.pin === unlockPin
           ? sessionUser
@@ -4008,7 +4019,7 @@ function App() {
               <h2>Backups</h2>
               <div className="check-list">
                 <span>Persistence</span>
-                <b>{storageMode === 'sqlite' ? 'SQLite database' : 'Browser fallback'}</b>
+                <b>{storageMode === 'database' ? databaseLabel : 'Browser fallback'}</b>
                 <span>Save status</span>
                 <b>{storageStatus}</b>
                 <span>Last saved</span>

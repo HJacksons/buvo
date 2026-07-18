@@ -1,8 +1,8 @@
 import Database from 'better-sqlite3'
-import { pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { initialData } from '../src/data/seed'
+import { hashPin, verifyPinHash } from './pin-security'
 import type {
   AppData,
   AuditLog,
@@ -32,26 +32,6 @@ const maybeNumber = (value: unknown) => (typeof value === 'number' ? value : und
 
 type Row = Record<string, unknown>
 
-const hashPin = (pin: string) => {
-  const salt = randomBytes(16).toString('hex')
-  const hash = pbkdf2Sync(pin, salt, 120_000, 32, 'sha256').toString('hex')
-
-  return `pbkdf2_sha256$120000$${salt}$${hash}`
-}
-
-const verifyPinHash = (pin: string, storedHash: string) => {
-  const [algorithm, iterationsText, salt, hash] = storedHash.split('$')
-
-  if (algorithm !== 'pbkdf2_sha256' || !iterationsText || !salt || !hash) {
-    return false
-  }
-
-  const expected = Buffer.from(hash, 'hex')
-  const actual = pbkdf2Sync(pin, salt, Number(iterationsText), expected.length, 'sha256')
-
-  return expected.length === actual.length && timingSafeEqual(expected, actual)
-}
-
 const getColumns = (table: string) =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
     (column) => column.name,
@@ -67,6 +47,12 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS store_meta (
+    id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS products (
@@ -299,6 +285,10 @@ const runMigrations = () => {
 }
 
 runMigrations()
+
+db.prepare(
+  "INSERT OR IGNORE INTO store_meta (id, revision, updated_at) VALUES ('main', 0, @updatedAt)",
+).run({ updatedAt: new Date().toISOString() })
 
 const replaceStoreTransaction = db.transaction((data: AppData) => {
   const existingPinHashes = new Map(
@@ -565,6 +555,10 @@ const replaceStoreTransaction = db.transaction((data: AppData) => {
   data.suppliers.forEach((value, position) =>
     insertListValue.run({ kind: 'supplier', position, value }),
   )
+
+  db.prepare(
+    "UPDATE store_meta SET revision = revision + 1, updated_at = @updatedAt WHERE id = 'main'",
+  ).run({ updatedAt: new Date().toISOString() })
 })
 
 const selectAll = (sql: string) => db.prepare(sql).all() as Row[]
@@ -790,6 +784,7 @@ export const loadStore = (): AppData => {
 
 export const replaceStore = (data: AppData) => {
   replaceStoreTransaction(data)
+  return getStoreRevision()
 }
 
 export const authenticateUser = (staffNumber: string, pin: string): User | null => {
@@ -832,11 +827,24 @@ export const unlockUser = (userId: string, pin: string): User | null => {
 
 export const resetStore = () => {
   replaceStore(initialData)
+  return loadStore()
 }
 
+export const getStoreRevision = () =>
+  Number(
+    (
+      db.prepare("SELECT revision FROM store_meta WHERE id = 'main'").get() as
+        | { revision: number }
+        | undefined
+    )?.revision ?? 0,
+  )
+
 export const getDatabaseInfo = () => ({
+  engine: 'sqlite',
+  location: databasePath,
   path: databasePath,
   productCount: db.prepare('SELECT COUNT(*) AS count FROM products').get() as { count: number },
+  revision: getStoreRevision(),
   schemaVersion: SCHEMA_VERSION,
 })
 

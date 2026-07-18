@@ -2,17 +2,11 @@ import { createReadStream, existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize } from 'node:path'
 import type { AppData } from '../src/domain/types'
-import {
-  authenticateUser,
-  getDatabaseInfo,
-  loadStore,
-  replaceStore,
-  resetStore,
-  unlockUser,
-} from './database'
+import { createDataStore } from './store'
 
 const port = Number(process.env.BUVO_API_PORT ?? 8787)
-const distDir = join(process.cwd(), 'dist')
+const distDir = process.env.BUVO_DIST_DIR ?? join(process.cwd(), 'dist')
+const store = await createDataStore()
 
 const mimeTypes: Record<string, string> = {
   '.css': 'text/css',
@@ -87,16 +81,19 @@ const server = createServer(async (request, response) => {
     if (requestUrl.pathname === '/api/health' && request.method === 'GET') {
       sendJson(response, 200, {
         ok: true,
-        database: getDatabaseInfo(),
+        database: await store.getDatabaseInfo(),
       })
       return
     }
 
     if (requestUrl.pathname === '/api/store' && request.method === 'GET') {
+      const database = await store.getDatabaseInfo()
+
       sendJson(response, 200, {
-        data: loadStore(),
+        data: await store.loadStore(),
+        revision: database.revision,
         savedAt: new Date().toISOString(),
-        storage: 'sqlite',
+        storage: database.engine,
       })
       return
     }
@@ -104,7 +101,7 @@ const server = createServer(async (request, response) => {
     if (requestUrl.pathname === '/api/auth/login' && request.method === 'POST') {
       const body = await readRequestBody(request)
       const parsed = JSON.parse(body) as { pin?: string; staffNumber?: string }
-      const user = authenticateUser(parsed.staffNumber ?? '', parsed.pin ?? '')
+      const user = await store.authenticateUser(parsed.staffNumber ?? '', parsed.pin ?? '')
 
       if (!user) {
         sendJson(response, 401, { error: 'Incorrect staff number, PIN, or inactive user.' })
@@ -118,7 +115,7 @@ const server = createServer(async (request, response) => {
     if (requestUrl.pathname === '/api/auth/unlock' && request.method === 'POST') {
       const body = await readRequestBody(request)
       const parsed = JSON.parse(body) as { pin?: string; userId?: string }
-      const user = unlockUser(parsed.userId ?? '', parsed.pin ?? '')
+      const user = await store.unlockUser(parsed.userId ?? '', parsed.pin ?? '')
 
       if (!user) {
         sendJson(response, 401, { error: 'Incorrect PIN or inactive user.' })
@@ -131,28 +128,34 @@ const server = createServer(async (request, response) => {
 
     if (requestUrl.pathname === '/api/store' && request.method === 'PUT') {
       const body = await readRequestBody(request)
-      const parsed = JSON.parse(body) as { data?: AppData }
+      const parsed = JSON.parse(body) as { data?: AppData; revision?: number | null }
 
       if (!parsed.data) {
         sendJson(response, 400, { error: 'Missing data payload.' })
         return
       }
 
-      replaceStore(parsed.data)
+      const result = await store.replaceStore(parsed.data, {
+        expectedRevision: parsed.revision,
+      })
+      const database = await store.getDatabaseInfo()
       sendJson(response, 200, {
         ok: true,
+        revision: result.revision,
         savedAt: new Date().toISOString(),
-        storage: 'sqlite',
+        storage: database.engine,
       })
       return
     }
 
     if (requestUrl.pathname === '/api/store/reset' && request.method === 'POST') {
-      resetStore()
+      const data = await store.resetStore()
+      const database = await store.getDatabaseInfo()
       sendJson(response, 200, {
-        data: loadStore(),
+        data,
+        revision: database.revision,
         savedAt: new Date().toISOString(),
-        storage: 'sqlite',
+        storage: database.engine,
       })
       return
     }
@@ -164,6 +167,14 @@ const server = createServer(async (request, response) => {
 
     serveStatic(requestUrl.pathname, response)
   } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes('Store changed on another counter')
+    ) {
+      sendJson(response, 409, { error: error.message })
+      return
+    }
+
     sendJson(response, 500, {
       error: error instanceof Error ? error.message : 'Unknown server error.',
     })
@@ -171,7 +182,8 @@ const server = createServer(async (request, response) => {
 })
 
 server.listen(port, '127.0.0.1', () => {
-  const info = getDatabaseInfo()
-  console.log(`BUVO POS API running at http://127.0.0.1:${port}`)
-  console.log(`SQLite database: ${info.path}`)
+  void store.getDatabaseInfo().then((info) => {
+    console.log(`BUVO POS API running at http://127.0.0.1:${port}`)
+    console.log(`${info.engine} database: ${info.location}`)
+  })
 })
