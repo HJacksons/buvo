@@ -10,6 +10,7 @@ import {
   ClipboardList,
   CreditCard,
   DatabaseBackup,
+  ExternalLink,
   FileClock,
   HandCoins,
   Landmark,
@@ -111,6 +112,8 @@ const INVENTORY_PICK_LIMIT = 5
 const DEBTOR_PAGE_SIZE = 10
 const DEBT_ACTIVITY_PAGE_SIZE = 10
 const PURCHASE_PICK_LIMIT = 5
+const CUSTOMER_DISPLAY_CHANNEL = 'buvo-customer-display'
+const CUSTOMER_DISPLAY_KEY = 'buvo-customer-display-state'
 
 const emptyReceivingDraft = (barcode = ''): ReceivingDraft => ({
   barcode,
@@ -154,6 +157,54 @@ type ProductEditDraft = {
 
 type PurchaseReceiveDraft = Record<string, string>
 
+type CustomerDisplayLine = {
+  barcode: string
+  discountPercent: number
+  id: string
+  lineTotal: number
+  name: string
+  quantity: number
+  unitPrice: number
+}
+
+type CustomerDisplayPayload = {
+  amountDue: number
+  branchName: string
+  cashierName: string
+  change: number
+  discount: number
+  lastItem?: {
+    barcode: string
+    name: string
+    unitPrice: number
+  }
+  lines: CustomerDisplayLine[]
+  paid: number
+  paymentSummary: string
+  receiptNo?: string
+  status: 'idle' | 'active' | 'paid'
+  subtotal: number
+  tax: number
+  total: number
+  updatedAt: string
+}
+
+const emptyCustomerDisplay: CustomerDisplayPayload = {
+  amountDue: 0,
+  branchName: 'Kampala branch',
+  cashierName: '',
+  change: 0,
+  discount: 0,
+  lines: [],
+  paid: 0,
+  paymentSummary: 'Waiting for checkout',
+  status: 'idle',
+  subtotal: 0,
+  tax: 0,
+  total: 0,
+  updatedAt: new Date().toISOString(),
+}
+
 const createProductEditDraft = (product: Product): ProductEditDraft => ({
   active: product.active,
   barcodes: product.barcodes.join(', '),
@@ -185,6 +236,9 @@ const makeAudit = (
 })
 
 function App() {
+  const isCustomerDisplay =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('display') === 'customer'
   const [initialStore] = useState(loadPersistedData)
   const [data, setData] = useState<AppData>(initialStore.data)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(initialStore.savedAt)
@@ -254,6 +308,8 @@ function App() {
   const [productPage, setProductPage] = useState(1)
   const [auditPage, setAuditPage] = useState(1)
   const [lastSale, setLastSale] = useState<Sale | null>(null)
+  const [lastCustomerItem, setLastCustomerItem] =
+    useState<CustomerDisplayPayload['lastItem']>()
   const [labelProduct, setLabelProduct] = useState<Product | null>(null)
   const [lastScanAt, setLastScanAt] = useState<string | null>(null)
   const [lastPrintAt, setLastPrintAt] = useState<string | null>(null)
@@ -261,6 +317,11 @@ function App() {
   const [status, setStatus] = useState('Offline counter ready.')
 
   useEffect(() => {
+    if (isCustomerDisplay) {
+      setIsStoreHydrating(false)
+      return
+    }
+
     let cancelled = false
 
     void loadDatabaseData().then((databaseStore) => {
@@ -286,10 +347,10 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [isCustomerDisplay])
 
   useEffect(() => {
-    if (isStoreHydrating) {
+    if (isStoreHydrating || isCustomerDisplay) {
       return
     }
 
@@ -326,7 +387,7 @@ function App() {
     if (!saveResult.ok) {
       setStatus(saveResult.message)
     }
-  }, [data, isStoreHydrating, storageMode])
+  }, [data, isCustomerDisplay, isStoreHydrating, storageMode])
 
   useEffect(() => {
     setProductPage(1)
@@ -581,6 +642,32 @@ function App() {
     sessionUser?.role === 'owner' ||
     sessionUser?.role === 'manager' ||
     sessionUser?.role === 'stock-admin'
+  const customerDisplayPayload = useMemo(
+    () =>
+      createCustomerDisplayPayload({
+        cartItems,
+        lastCustomerItem,
+        lastSale,
+        paidTotal,
+        payments,
+        saleTotals,
+        sessionUser,
+      }),
+    [cartItems, lastCustomerItem, lastSale, paidTotal, payments, saleTotals, sessionUser],
+  )
+
+  useEffect(() => {
+    if (isCustomerDisplay || typeof window === 'undefined') {
+      return
+    }
+
+    const serialized = JSON.stringify(customerDisplayPayload)
+    window.localStorage.setItem(CUSTOMER_DISPLAY_KEY, serialized)
+
+    const channel = new BroadcastChannel(CUSTOMER_DISPLAY_CHANNEL)
+    channel.postMessage(customerDisplayPayload)
+    channel.close()
+  }, [customerDisplayPayload, isCustomerDisplay])
 
   const commitData = (
     updater: (currentData: AppData) => AppData,
@@ -1057,14 +1144,16 @@ function App() {
   }
 
   const addProductToCart = (product: Product) => {
+    const quantityAlreadyInCart =
+      cart.find((line) => line.productId === product.id)?.quantity ?? 0
+
+    if (quantityAlreadyInCart + 1 > product.stockOnHand) {
+      setStatus(`${product.name} has no more available stock.`)
+      return
+    }
+
     setCart((currentCart) => {
       const existing = currentCart.find((line) => line.productId === product.id)
-      const quantityAlreadyInCart = existing?.quantity ?? 0
-
-      if (quantityAlreadyInCart + 1 > product.stockOnHand) {
-        setStatus(`${product.name} has no more available stock.`)
-        return currentCart
-      }
 
       if (existing) {
         return currentCart.map((line) =>
@@ -1075,6 +1164,11 @@ function App() {
       }
 
       return [...currentCart, { productId: product.id, quantity: 1, discountPercent: 0 }]
+    })
+    setLastCustomerItem({
+      barcode: product.barcodes[0] ?? product.internalBarcode ?? '',
+      name: product.name,
+      unitPrice: product.unitPrice,
     })
     setStatus(`${product.name} added to basket.`)
   }
@@ -2301,6 +2395,24 @@ function App() {
     }, 50)
   }
 
+  const openCustomerDisplay = () => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(CUSTOMER_DISPLAY_KEY, JSON.stringify(customerDisplayPayload))
+    window.open(
+      `${window.location.origin}${window.location.pathname}?display=customer`,
+      'buvo-customer-display',
+      'popup,width=980,height=720',
+    )
+    setStatus('Customer display opened. Move that window to the customer screen.')
+  }
+
+  if (isCustomerDisplay) {
+    return <CustomerDisplay />
+  }
+
   if (!sessionUser) {
     return (
       <LoginScreen
@@ -2589,6 +2701,11 @@ function App() {
               <button className="secondary-action" type="button" onClick={printReceipt}>
                 <Printer size={18} />
                 Print receipt
+              </button>
+
+              <button className="secondary-action" type="button" onClick={openCustomerDisplay}>
+                <ExternalLink size={18} />
+                Customer display
               </button>
 
               {lastSale && <ReceiptPreview sale={lastSale} />}
@@ -4530,6 +4647,135 @@ function DataListInput({
   )
 }
 
+function CustomerDisplay() {
+  const [payload, setPayload] = useState<CustomerDisplayPayload>(readCustomerDisplayPayload)
+
+  useEffect(() => {
+    const channel = new BroadcastChannel(CUSTOMER_DISPLAY_CHANNEL)
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === CUSTOMER_DISPLAY_KEY) {
+        setPayload(readCustomerDisplayPayload())
+      }
+    }
+
+    channel.onmessage = (event: MessageEvent<CustomerDisplayPayload>) => {
+      setPayload(event.data)
+    }
+    window.addEventListener('storage', handleStorage)
+
+    return () => {
+      channel.close()
+      window.removeEventListener('storage', handleStorage)
+    }
+  }, [])
+
+  const headline =
+    payload.status === 'paid'
+      ? 'Thank you for shopping with BUVO'
+      : payload.status === 'active'
+        ? 'Your basket'
+        : 'Welcome to BUVO'
+
+  return (
+    <main className="customer-display-shell">
+      <header className="customer-display-header">
+        <div className="brand-lockup">
+          <img className="brand-mark" src="/buvo-logo.svg" alt="BUVO" />
+          <div>
+            <strong>BUVO POS</strong>
+            <span>{payload.branchName}</span>
+          </div>
+        </div>
+        <div>
+          <span>{payload.cashierName ? `Served by ${payload.cashierName}` : 'Counter ready'}</span>
+          <b>{formatDateTime(payload.updatedAt)}</b>
+        </div>
+      </header>
+
+      <section className="customer-display-total">
+        <span>{headline}</span>
+        <strong>{formatMoney(payload.total)}</strong>
+        {payload.receiptNo && <b>{payload.receiptNo}</b>}
+      </section>
+
+      <section className="customer-display-grid">
+        <div className="customer-items-panel">
+          <div className="customer-panel-title">
+            <span>Items</span>
+            <b>{payload.lines.length}</b>
+          </div>
+          {payload.lines.length === 0 ? (
+            <div className="customer-empty">Items will appear here as they are scanned.</div>
+          ) : (
+            <div className="customer-item-list">
+              {payload.lines.map((line) => (
+                <div className="customer-item-row" key={line.id}>
+                  <div>
+                    <strong>{line.name}</strong>
+                    <span>
+                      {line.quantity} x {formatMoney(line.unitPrice)}
+                      {line.discountPercent > 0
+                        ? ` / ${line.discountPercent}% discount`
+                        : ''}
+                    </span>
+                  </div>
+                  <b>{formatMoney(line.lineTotal)}</b>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <aside className="customer-summary-panel">
+          {payload.lastItem ? (
+            <div className="customer-last-item">
+              <span>Last scanned</span>
+              <strong>{payload.lastItem.name}</strong>
+              <b>{formatMoney(payload.lastItem.unitPrice)}</b>
+            </div>
+          ) : (
+            <div className="customer-last-item muted">
+              <span>Last scanned</span>
+              <strong>Waiting for item</strong>
+            </div>
+          )}
+
+          <div className="customer-total-lines">
+            <div>
+              <span>Subtotal</span>
+              <b>{formatMoney(payload.subtotal)}</b>
+            </div>
+            <div>
+              <span>Discount</span>
+              <b>{formatMoney(payload.discount)}</b>
+            </div>
+            <div>
+              <span>VAT</span>
+              <b>{formatMoney(payload.tax)}</b>
+            </div>
+            <div className="customer-due-line">
+              <span>{payload.status === 'paid' ? 'Paid' : 'Amount due'}</span>
+              <b>
+                {payload.status === 'paid'
+                  ? formatMoney(payload.paid)
+                  : formatMoney(payload.amountDue)}
+              </b>
+            </div>
+            {payload.change > 0 && (
+              <div className="customer-change-line">
+                <span>Change</span>
+                <b>{formatMoney(payload.change)}</b>
+              </div>
+            )}
+          </div>
+
+          <p>{payload.paymentSummary}</p>
+        </aside>
+      </section>
+    </main>
+  )
+}
+
 function getTitle(tab: Tab) {
   const titles: Record<Tab, string> = {
     checkout: 'Checkout',
@@ -4693,6 +4939,111 @@ function createMovement(
 
 function uniqueList(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort()
+}
+
+function lineTotal(item: Sale['items'][number]) {
+  return item.unitPrice * item.quantity * (1 - item.discountPercent / 100)
+}
+
+function toCustomerLine(item: Sale['items'][number]): CustomerDisplayLine {
+  return {
+    barcode: item.barcode,
+    discountPercent: item.discountPercent,
+    id: item.productId,
+    lineTotal: lineTotal(item),
+    name: item.name,
+    quantity: item.quantity,
+    unitPrice: item.unitPrice,
+  }
+}
+
+function createCustomerDisplayPayload({
+  cartItems,
+  lastCustomerItem,
+  lastSale,
+  paidTotal,
+  payments,
+  saleTotals,
+  sessionUser,
+}: {
+  cartItems: Sale['items']
+  lastCustomerItem?: CustomerDisplayPayload['lastItem']
+  lastSale: Sale | null
+  paidTotal: number
+  payments: Payment[]
+  saleTotals: Pick<Sale, 'discount' | 'subtotal' | 'tax' | 'total'>
+  sessionUser: User | null
+}): CustomerDisplayPayload {
+  const activeLines = cartItems.map(toCustomerLine)
+
+  if (activeLines.length > 0) {
+    return {
+      amountDue: Math.max(saleTotals.total - paidTotal, 0),
+      branchName: 'Kampala branch',
+      cashierName: sessionUser?.name ?? '',
+      change: Math.max(paidTotal - saleTotals.total, 0),
+      discount: saleTotals.discount,
+      lastItem: lastCustomerItem,
+      lines: activeLines,
+      paid: paidTotal,
+      paymentSummary:
+        payments.length > 0
+          ? payments
+              .map((payment) => `${paymentLabels[payment.method]} ${formatMoney(payment.amount)}`)
+              .join(' / ')
+          : 'Payment not recorded yet',
+      status: 'active',
+      subtotal: saleTotals.subtotal,
+      tax: saleTotals.tax,
+      total: saleTotals.total,
+      updatedAt: new Date().toISOString(),
+    }
+  }
+
+  if (lastSale) {
+    const paid = lastSale.payments.reduce((sum, payment) => sum + payment.amount, 0)
+
+    return {
+      amountDue: 0,
+      branchName: 'Kampala branch',
+      cashierName: lastSale.cashierName,
+      change: Math.max(paid - lastSale.total, 0),
+      discount: lastSale.discount,
+      lastItem: lastCustomerItem,
+      lines: lastSale.items.map(toCustomerLine),
+      paid,
+      paymentSummary: lastSale.payments
+        .map((payment) => `${paymentLabels[payment.method]} ${formatMoney(payment.amount)}`)
+        .join(' / '),
+      receiptNo: lastSale.receiptNo,
+      status: 'paid',
+      subtotal: lastSale.subtotal,
+      tax: lastSale.tax,
+      total: lastSale.total,
+      updatedAt: lastSale.createdAt,
+    }
+  }
+
+  return {
+    ...emptyCustomerDisplay,
+    cashierName: sessionUser?.name ?? '',
+    lastItem: lastCustomerItem,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function readCustomerDisplayPayload() {
+  if (typeof window === 'undefined') {
+    return emptyCustomerDisplay
+  }
+
+  try {
+    const saved = window.localStorage.getItem(CUSTOMER_DISPLAY_KEY)
+
+    return saved ? (JSON.parse(saved) as CustomerDisplayPayload) : emptyCustomerDisplay
+  } catch {
+    return emptyCustomerDisplay
+  }
 }
 
 function getDebtorBalance(debtorId: string, transactions: DebtTransaction[]) {

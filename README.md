@@ -6,6 +6,7 @@ BUVO POS is a Uganda-focused supermarket counter and stock-management system. It
 
 - Staff login/logout with role-specific navigation and automatic inactivity lock.
 - Checkout barcode scanning with quantity controls and line discounts.
+- Customer-facing display window for scanned items, selling prices, totals, paid amount, and change.
 - Cash, MTN MoMo, Airtel Money, card, split-tender, and credit-account recording.
 - Receipt preview plus browser print output for an 80 mm receipt layout.
 - Product receiving by barcode, new-product creation, categories, suppliers, and EFRIS commodity-code fields.
@@ -46,6 +47,12 @@ Run the desktop development app with:
 ```bash
 npm run desktop:dev
 ```
+
+## Customer display
+
+From Checkout, click `Customer display` and move the opened window to the customer-facing monitor. The display updates live when the cashier scans items, changes quantities, records payments, or completes the sale.
+
+The customer display intentionally shows only customer-safe information: item name, barcode, quantity, selling price, discount, VAT estimate, amount due, paid amount, change, and receipt number after payment. It does not show buying cost, profit, supplier cost, admin panels, debtor lists, or cashier controls.
 
 ## Demo logins
 
