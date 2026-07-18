@@ -2,7 +2,14 @@ import { createReadStream, existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize } from 'node:path'
 import type { AppData } from '../src/domain/types'
-import { getDatabaseInfo, loadStore, replaceStore, resetStore } from './database'
+import {
+  authenticateUser,
+  getDatabaseInfo,
+  loadStore,
+  replaceStore,
+  resetStore,
+  unlockUser,
+} from './database'
 
 const port = Number(process.env.BUVO_API_PORT ?? 8787)
 const distDir = join(process.cwd(), 'dist')
@@ -91,6 +98,34 @@ const server = createServer(async (request, response) => {
         savedAt: new Date().toISOString(),
         storage: 'sqlite',
       })
+      return
+    }
+
+    if (requestUrl.pathname === '/api/auth/login' && request.method === 'POST') {
+      const body = await readRequestBody(request)
+      const parsed = JSON.parse(body) as { pin?: string; staffNumber?: string }
+      const user = authenticateUser(parsed.staffNumber ?? '', parsed.pin ?? '')
+
+      if (!user) {
+        sendJson(response, 401, { error: 'Incorrect staff number, PIN, or inactive user.' })
+        return
+      }
+
+      sendJson(response, 200, { user })
+      return
+    }
+
+    if (requestUrl.pathname === '/api/auth/unlock' && request.method === 'POST') {
+      const body = await readRequestBody(request)
+      const parsed = JSON.parse(body) as { pin?: string; userId?: string }
+      const user = unlockUser(parsed.userId ?? '', parsed.pin ?? '')
+
+      if (!user) {
+        sendJson(response, 401, { error: 'Incorrect PIN or inactive user.' })
+        return
+      }
+
+      sendJson(response, 200, { user })
       return
     }
 

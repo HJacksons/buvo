@@ -28,6 +28,13 @@ export type EfrisTransactionType = 'receipt' | 'credit-note' | 'cancelled-receip
 
 export type DebtTransactionType = 'charge' | 'payment' | 'adjustment'
 
+export type PurchaseOrderStatus =
+  | 'draft'
+  | 'sent'
+  | 'part-received'
+  | 'received'
+  | 'cancelled'
+
 export type Product = {
   id: string
   name: string
@@ -180,6 +187,30 @@ export type DebtTransaction = {
   paymentMethod?: Exclude<PaymentMethod, 'credit' | 'split'>
 }
 
+export type PurchaseOrderItem = {
+  productId: string
+  productName: string
+  barcode: string
+  quantityOrdered: number
+  quantityReceived: number
+  unitCost: number
+}
+
+export type PurchaseOrder = {
+  id: string
+  orderNo: string
+  supplier: string
+  createdAt: string
+  expectedAt?: string
+  createdById: string
+  createdByName: string
+  status: PurchaseOrderStatus
+  items: PurchaseOrderItem[]
+  total: number
+  invoiceNo?: string
+  notes?: string
+}
+
 export type ReceivingDraft = {
   barcode: string
   name: string
@@ -203,6 +234,7 @@ export type AppData = {
   shifts: CashierShift[]
   debtors: Debtor[]
   debtTransactions: DebtTransaction[]
+  purchaseOrders: PurchaseOrder[]
   users: User[]
   auditLogs: AuditLog[]
   efrisTransactions: EfrisTransaction[]

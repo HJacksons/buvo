@@ -4,6 +4,7 @@ import type {
   DebtTransaction,
   Debtor,
   Product,
+  PurchaseOrder,
   StockMovement,
   User,
 } from '../domain/types'
@@ -199,6 +200,32 @@ const debtTransactions: DebtTransaction[] = [
   },
 ]
 
+const purchaseOrders: PurchaseOrder[] = [
+  {
+    id: 'po-demo-low-stock',
+    orderNo: 'PO-20260718-001',
+    supplier: 'Mbarara Dairy Farm',
+    createdAt: now,
+    expectedAt: '2026-07-22',
+    createdById: 'usr-stock',
+    createdByName: 'Stock Administrator',
+    status: 'sent',
+    items: [
+      {
+        productId: 'prd-milk',
+        productName: 'BUVO Fresh Milk 500ml',
+        barcode: 'BUVO-DAIRY-500',
+        quantityOrdered: 48,
+        quantityReceived: 0,
+        unitCost: 1300,
+      },
+    ],
+    total: 62400,
+    invoiceNo: 'SUP-MDF-1042',
+    notes: 'Demo supplier order for low dairy stock.',
+  },
+]
+
 export const initialData: AppData = {
   products,
   movements,
@@ -207,6 +234,7 @@ export const initialData: AppData = {
   shifts,
   debtors,
   debtTransactions,
+  purchaseOrders,
   users,
   auditLogs: [
     {

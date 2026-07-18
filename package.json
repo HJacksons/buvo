@@ -9,6 +9,7 @@
     "dev:api": "tsx watch server/index.ts",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test": "node --test --import tsx tests/*.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

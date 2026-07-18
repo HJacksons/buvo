@@ -67,6 +67,11 @@ export const createId = (prefix: string) =>
 export const createReceiptNo = (count: number) =>
   `BUVO-${String(count + 1).padStart(6, '0')}`
 
+export const createPurchaseOrderNo = (count: number) =>
+  `PO-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(
+    count + 1,
+  ).padStart(3, '0')}`
+
 export const createInternalBarcode = (
   productName: string,
   existingBarcodes: string[] = [],

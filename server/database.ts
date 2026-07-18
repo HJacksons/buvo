@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { initialData } from '../src/data/seed'
@@ -11,6 +12,8 @@ import type {
   EfrisTransaction,
   Payment,
   Product,
+  PurchaseOrder,
+  PurchaseOrderItem,
   ReturnRecord,
   Sale,
   SaleItem,
@@ -19,6 +22,7 @@ import type {
 } from '../src/domain/types'
 
 const databasePath = process.env.BUVO_DB_PATH ?? join(process.cwd(), 'data', 'buvo-pos.sqlite')
+const SCHEMA_VERSION = 3
 
 const boolToInt = (value: boolean) => (value ? 1 : 0)
 const intToBool = (value: number) => value === 1
@@ -28,6 +32,31 @@ const maybeNumber = (value: unknown) => (typeof value === 'number' ? value : und
 
 type Row = Record<string, unknown>
 
+const hashPin = (pin: string) => {
+  const salt = randomBytes(16).toString('hex')
+  const hash = pbkdf2Sync(pin, salt, 120_000, 32, 'sha256').toString('hex')
+
+  return `pbkdf2_sha256$120000$${salt}$${hash}`
+}
+
+const verifyPinHash = (pin: string, storedHash: string) => {
+  const [algorithm, iterationsText, salt, hash] = storedHash.split('$')
+
+  if (algorithm !== 'pbkdf2_sha256' || !iterationsText || !salt || !hash) {
+    return false
+  }
+
+  const expected = Buffer.from(hash, 'hex')
+  const actual = pbkdf2Sync(pin, salt, Number(iterationsText), expected.length, 'sha256')
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual)
+}
+
+const getColumns = (table: string) =>
+  (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+    (column) => column.name,
+  )
+
 mkdirSync(dirname(databasePath), { recursive: true })
 
 const db = new Database(databasePath)
@@ -35,6 +64,11 @@ db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS products (
     id TEXT PRIMARY KEY,
     position INTEGER NOT NULL,
@@ -170,6 +204,34 @@ db.exec(`
     payment_method TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS purchase_orders (
+    id TEXT PRIMARY KEY,
+    position INTEGER NOT NULL,
+    order_no TEXT NOT NULL,
+    supplier TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expected_at TEXT,
+    created_by_id TEXT NOT NULL,
+    created_by_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    total REAL NOT NULL,
+    invoice_no TEXT,
+    notes TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS purchase_order_items (
+    order_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    product_id TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    barcode TEXT NOT NULL,
+    quantity_ordered REAL NOT NULL,
+    quantity_received REAL NOT NULL,
+    unit_cost REAL NOT NULL,
+    PRIMARY KEY (order_id, position),
+    FOREIGN KEY (order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     position INTEGER NOT NULL,
@@ -177,6 +239,7 @@ db.exec(`
     name TEXT NOT NULL,
     role TEXT NOT NULL,
     pin TEXT NOT NULL,
+    pin_hash TEXT,
     active INTEGER NOT NULL
   );
 
@@ -212,7 +275,41 @@ db.exec(`
   );
 `)
 
+const runMigrations = () => {
+  const userColumns = getColumns('users')
+
+  if (!userColumns.includes('pin_hash')) {
+    db.exec('ALTER TABLE users ADD COLUMN pin_hash TEXT')
+  }
+
+  const usersMissingHashes = db
+    .prepare("SELECT id, pin FROM users WHERE pin_hash IS NULL OR pin_hash = ''")
+    .all() as Array<{ id: string; pin: string }>
+  const updateHash = db.prepare("UPDATE users SET pin_hash = @pinHash, pin = '' WHERE id = @id")
+
+  usersMissingHashes.forEach((user) => {
+    if (user.pin) {
+      updateHash.run({ id: user.id, pinHash: hashPin(user.pin) })
+    }
+  })
+
+  db.prepare(
+    'INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (@version, @appliedAt)',
+  ).run({ version: SCHEMA_VERSION, appliedAt: new Date().toISOString() })
+}
+
+runMigrations()
+
 const replaceStoreTransaction = db.transaction((data: AppData) => {
+  const existingPinHashes = new Map(
+    (
+      db.prepare('SELECT id, pin_hash FROM users').all() as Array<{
+        id: string
+        pin_hash: string | null
+      }>
+    ).map((user) => [user.id, user.pin_hash ?? '']),
+  )
+
   db.exec(`
     DELETE FROM product_barcodes;
     DELETE FROM sale_items;
@@ -224,6 +321,8 @@ const replaceStoreTransaction = db.transaction((data: AppData) => {
     DELETE FROM shifts;
     DELETE FROM debtors;
     DELETE FROM debt_transactions;
+    DELETE FROM purchase_order_items;
+    DELETE FROM purchase_orders;
     DELETE FROM users;
     DELETE FROM audit_logs;
     DELETE FROM efris_transactions;
@@ -373,12 +472,60 @@ const replaceStoreTransaction = db.transaction((data: AppData) => {
     })
   })
 
+  const insertPurchaseOrder = db.prepare(`
+    INSERT INTO purchase_orders (
+      id, position, order_no, supplier, created_at, expected_at, created_by_id,
+      created_by_name, status, total, invoice_no, notes
+    ) VALUES (
+      @id, @position, @orderNo, @supplier, @createdAt, @expectedAt, @createdById,
+      @createdByName, @status, @total, @invoiceNo, @notes
+    )
+  `)
+  const insertPurchaseOrderItem = db.prepare(`
+    INSERT INTO purchase_order_items (
+      order_id, position, product_id, product_name, barcode, quantity_ordered,
+      quantity_received, unit_cost
+    ) VALUES (
+      @orderId, @position, @productId, @productName, @barcode, @quantityOrdered,
+      @quantityReceived, @unitCost
+    )
+  `)
+  ;(data.purchaseOrders ?? []).forEach((order, position) => {
+    insertPurchaseOrder.run({
+      ...order,
+      position,
+      expectedAt: optional(order.expectedAt),
+      invoiceNo: optional(order.invoiceNo),
+      notes: optional(order.notes),
+    })
+    order.items.forEach((item, itemPosition) => {
+      insertPurchaseOrderItem.run({
+        ...item,
+        orderId: order.id,
+        position: itemPosition,
+      })
+    })
+  })
+
   const insertUser = db.prepare(`
-    INSERT INTO users (id, position, staff_number, name, role, pin, active)
-    VALUES (@id, @position, @staffNumber, @name, @role, @pin, @active)
+    INSERT INTO users (id, position, staff_number, name, role, pin, pin_hash, active)
+    VALUES (@id, @position, @staffNumber, @name, @role, @pin, @pinHash, @active)
   `)
   data.users.forEach((user, position) => {
-    insertUser.run({ ...user, position, active: boolToInt(user.active) })
+    const existingPinHash = existingPinHashes.get(user.id)
+    const pinHash = user.pin ? hashPin(user.pin) : existingPinHash
+
+    if (!pinHash) {
+      throw new Error(`Missing PIN for ${user.name}.`)
+    }
+
+    insertUser.run({
+      ...user,
+      position,
+      pin: '',
+      pinHash,
+      active: boolToInt(user.active),
+    })
   })
 
   const insertAuditLog = db.prepare(`
@@ -552,12 +699,44 @@ export const loadStore = (): AppData => {
     }),
   ) satisfies DebtTransaction[]
 
+  const purchaseOrders = selectAll('SELECT * FROM purchase_orders ORDER BY position').map(
+    (row) => {
+      const orderId = String(row.id)
+      const escapedOrderId = orderId.replace(/'/g, "''")
+      const items = selectAll(
+        `SELECT * FROM purchase_order_items WHERE order_id = '${escapedOrderId}' ORDER BY position`,
+      ).map((itemRow) => ({
+        productId: String(itemRow.product_id),
+        productName: String(itemRow.product_name),
+        barcode: String(itemRow.barcode),
+        quantityOrdered: Number(itemRow.quantity_ordered),
+        quantityReceived: Number(itemRow.quantity_received),
+        unitCost: Number(itemRow.unit_cost),
+      })) satisfies PurchaseOrderItem[]
+
+      return {
+        id: orderId,
+        orderNo: String(row.order_no),
+        supplier: String(row.supplier),
+        createdAt: String(row.created_at),
+        expectedAt: maybeString(row.expected_at),
+        createdById: String(row.created_by_id),
+        createdByName: String(row.created_by_name),
+        status: String(row.status) as PurchaseOrder['status'],
+        items,
+        total: Number(row.total),
+        invoiceNo: maybeString(row.invoice_no),
+        notes: maybeString(row.notes),
+      }
+    },
+  ) satisfies PurchaseOrder[]
+
   const users = selectAll('SELECT * FROM users ORDER BY position').map((row) => ({
     id: String(row.id),
     staffNumber: String(row.staff_number),
     name: String(row.name),
     role: String(row.role) as User['role'],
-    pin: String(row.pin),
+    pin: '',
     active: intToBool(Number(row.active)),
   })) satisfies User[]
 
@@ -600,6 +779,7 @@ export const loadStore = (): AppData => {
     shifts,
     debtors,
     debtTransactions,
+    purchaseOrders,
     users,
     auditLogs,
     efrisTransactions,
@@ -612,6 +792,44 @@ export const replaceStore = (data: AppData) => {
   replaceStoreTransaction(data)
 }
 
+export const authenticateUser = (staffNumber: string, pin: string): User | null => {
+  const row = db
+    .prepare(
+      'SELECT id, staff_number, name, role, pin_hash, active FROM users WHERE staff_number = ?',
+    )
+    .get(staffNumber) as
+    | {
+        id: string
+        staff_number: string
+        name: string
+        role: User['role']
+        pin_hash: string | null
+        active: number
+      }
+    | undefined
+
+  if (!row || !intToBool(row.active) || !row.pin_hash || !verifyPinHash(pin, row.pin_hash)) {
+    return null
+  }
+
+  return {
+    id: row.id,
+    staffNumber: row.staff_number,
+    name: row.name,
+    role: row.role,
+    pin: '',
+    active: true,
+  }
+}
+
+export const unlockUser = (userId: string, pin: string): User | null => {
+  const row = db
+    .prepare('SELECT staff_number FROM users WHERE id = ? AND active = 1')
+    .get(userId) as { staff_number: string } | undefined
+
+  return row ? authenticateUser(row.staff_number, pin) : null
+}
+
 export const resetStore = () => {
   replaceStore(initialData)
 }
@@ -619,6 +837,7 @@ export const resetStore = () => {
 export const getDatabaseInfo = () => ({
   path: databasePath,
   productCount: db.prepare('SELECT COUNT(*) AS count FROM products').get() as { count: number },
+  schemaVersion: SCHEMA_VERSION,
 })
 
 const productCount = db.prepare('SELECT COUNT(*) AS count FROM products').get() as {

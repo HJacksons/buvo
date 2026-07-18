@@ -37,6 +37,7 @@ import {
 import './App.css'
 import { BRANCH_ID, initialData } from './data/seed'
 import {
+  authenticateDatabaseUser,
   createBackupPayload,
   loadDatabaseData,
   loadPersistedData,
@@ -44,6 +45,7 @@ import {
   parseBackupPayload,
   saveDatabaseData,
   savePersistedData,
+  unlockDatabaseUser,
 } from './data/storage'
 import type {
   AppData,
@@ -54,6 +56,8 @@ import type {
   Payment,
   PaymentMethod,
   Product,
+  PurchaseOrder,
+  PurchaseOrderItem,
   ReceivingDraft,
   Sale,
   StockMovement,
@@ -64,6 +68,7 @@ import { formatDateTime, formatMoney, paymentLabels } from './utils/format'
 import {
   createId,
   createInternalBarcode,
+  createPurchaseOrderNo,
   createReceiptNo,
   createStaffNumber,
   findProductByBarcode,
@@ -105,6 +110,7 @@ const ACTIVITY_PAGE_SIZE = 10
 const INVENTORY_PICK_LIMIT = 5
 const DEBTOR_PAGE_SIZE = 10
 const DEBT_ACTIVITY_PAGE_SIZE = 10
+const PURCHASE_PICK_LIMIT = 5
 
 const emptyReceivingDraft = (barcode = ''): ReceivingDraft => ({
   barcode,
@@ -130,6 +136,38 @@ type Notification = {
   actionTab: Tab
   actionLabel: string
 }
+
+type ProductEditDraft = {
+  active: boolean
+  barcodes: string
+  category: string
+  efrisCommodityCode: string
+  expiryDate: string
+  minStock: string
+  name: string
+  supplier: string
+  taxCategory: string
+  taxRate: string
+  unitCost: string
+  unitPrice: string
+}
+
+type PurchaseReceiveDraft = Record<string, string>
+
+const createProductEditDraft = (product: Product): ProductEditDraft => ({
+  active: product.active,
+  barcodes: product.barcodes.join(', '),
+  category: product.category,
+  efrisCommodityCode: product.efrisCommodityCode,
+  expiryDate: product.expiryDate ?? '',
+  minStock: String(product.minStock),
+  name: product.name,
+  supplier: product.supplier,
+  taxCategory: product.taxCategory,
+  taxRate: String(product.taxRate * 100),
+  unitCost: String(product.unitCost),
+  unitPrice: String(product.unitPrice),
+})
 
 const makeAudit = (
   user: User,
@@ -165,10 +203,25 @@ function App() {
   const [receivingDraft, setReceivingDraft] = useState<ReceivingDraft>(
     emptyReceivingDraft(),
   )
+  const [purchaseSupplier, setPurchaseSupplier] = useState(initialData.suppliers[0] ?? '')
+  const [purchaseExpectedAt, setPurchaseExpectedAt] = useState('')
+  const [purchaseInvoiceNo, setPurchaseInvoiceNo] = useState('')
+  const [purchaseNotes, setPurchaseNotes] = useState('')
+  const [purchaseProductSearch, setPurchaseProductSearch] = useState('')
+  const [purchaseItems, setPurchaseItems] = useState<PurchaseOrderItem[]>([])
+  const [selectedPurchaseOrderId, setSelectedPurchaseOrderId] = useState(
+    initialData.purchaseOrders[0]?.id ?? '',
+  )
+  const [purchaseReceiveDraft, setPurchaseReceiveDraft] = useState<PurchaseReceiveDraft>(
+    {},
+  )
   const [productSearch, setProductSearch] = useState('')
   const [returnSaleId, setReturnSaleId] = useState('')
   const [returnReason, setReturnReason] = useState('Customer return')
   const [selectedProductId, setSelectedProductId] = useState(initialData.products[0].id)
+  const [productEditDraft, setProductEditDraft] = useState<ProductEditDraft>(
+    createProductEditDraft(initialData.products[0]),
+  )
   const [inventorySearch, setInventorySearch] = useState('')
   const [stockCountValue, setStockCountValue] = useState('')
   const [stockReason, setStockReason] = useState('stock-count')
@@ -444,8 +497,35 @@ function App() {
     debtActivityPageStart + DEBT_ACTIVITY_PAGE_SIZE,
     data.debtTransactions.length,
   )
+  const purchaseOrderTotal = purchaseItems.reduce(
+    (sum, item) => sum + item.quantityOrdered * item.unitCost,
+    0,
+  )
+  const openPurchaseOrders = data.purchaseOrders.filter(
+    (order) => order.status !== 'received' && order.status !== 'cancelled',
+  )
+  const selectedPurchaseOrder =
+    data.purchaseOrders.find((order) => order.id === selectedPurchaseOrderId) ??
+    openPurchaseOrders[0] ??
+    data.purchaseOrders[0]
+  const purchaseProductMatches = data.products
+    .filter((product) => {
+      const target = `${product.name} ${product.category} ${product.supplier} ${product.barcodes.join(
+        ' ',
+      )}`.toLowerCase()
+
+      return product.active && target.includes(purchaseProductSearch.toLowerCase())
+    })
+    .slice(0, PURCHASE_PICK_LIMIT)
   const selectedProduct =
     data.products.find((product) => product.id === selectedProductId) ?? data.products[0]
+
+  useEffect(() => {
+    if (selectedProduct) {
+      setProductEditDraft(createProductEditDraft(selectedProduct))
+    }
+  }, [selectedProduct])
+
   const deviceStatus = {
     printer: lastPrintAt ? `Print dialog used ${formatDateTime(lastPrintAt)}` : 'Not verified',
     scanner: lastScanAt ? `Last barcode input ${formatDateTime(lastScanAt)}` : 'Not verified',
@@ -611,6 +691,42 @@ function App() {
     )
   }
 
+  const exportPurchaseOrdersReport = () => {
+    downloadCsv(
+      'purchase-orders',
+      [
+        'Order',
+        'Supplier',
+        'Created',
+        'Expected',
+        'Status',
+        'Invoice',
+        'Product',
+        'Barcode',
+        'Ordered',
+        'Received',
+        'Unit cost',
+        'Line total',
+      ],
+      data.purchaseOrders.flatMap((order) =>
+        order.items.map((item) => [
+          order.orderNo,
+          order.supplier,
+          formatDateTime(order.createdAt),
+          order.expectedAt,
+          order.status,
+          order.invoiceNo,
+          item.productName,
+          item.barcode,
+          item.quantityOrdered,
+          item.quantityReceived,
+          item.unitCost,
+          item.quantityOrdered * item.unitCost,
+        ]),
+      ),
+    )
+  }
+
   const exportLowStockExpiryReport = () => {
     const expiringProducts = data.products.filter((product) => product.expiryDate)
 
@@ -728,13 +844,122 @@ function App() {
     )
   }
 
-  const handleLogin = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const user = data.users.find(
-      (candidate) => candidate.staffNumber === loginStaffNumber.trim(),
+  const saveProductEdit = () => {
+    if (!sessionUser || sessionUser.role === 'cashier') {
+      setStatus('Ask a manager or stock administrator to edit products.')
+      return
+    }
+
+    if (!selectedProduct) {
+      setStatus('Select a product to edit.')
+      return
+    }
+
+    const unitCost = Number(productEditDraft.unitCost)
+    const unitPrice = Number(productEditDraft.unitPrice)
+    const taxRate = Number(productEditDraft.taxRate)
+    const minStock = Number(productEditDraft.minStock)
+    const barcodes = uniqueList(
+      productEditDraft.barcodes
+        .split(',')
+        .map((barcode) => barcode.trim())
+        .filter(Boolean),
     )
 
-    if (!user || !user.active || user.pin !== loginPin) {
+    if (!productEditDraft.name.trim() || !productEditDraft.category.trim()) {
+      setStatus('Product name and category are required.')
+      return
+    }
+
+    if (
+      [unitCost, unitPrice, taxRate, minStock].some((value) => Number.isNaN(value) || value < 0)
+    ) {
+      setStatus('Enter valid product prices, tax, and minimum stock.')
+      return
+    }
+
+    if (barcodes.length === 0) {
+      setStatus('At least one product barcode is required.')
+      return
+    }
+
+    const duplicateBarcode = data.products.some(
+      (product) =>
+        product.id !== selectedProduct.id &&
+        product.barcodes.some((barcode) => barcodes.includes(barcode)),
+    )
+
+    if (duplicateBarcode) {
+      setStatus('One of these barcodes is already used by another product.')
+      return
+    }
+
+    const priceChanged =
+      selectedProduct.unitCost !== unitCost || selectedProduct.unitPrice !== unitPrice
+    const activeChanged = selectedProduct.active !== productEditDraft.active
+    const details = [
+      priceChanged
+        ? `Cost ${formatMoney(selectedProduct.unitCost)} -> ${formatMoney(unitCost)}, price ${formatMoney(
+            selectedProduct.unitPrice,
+          )} -> ${formatMoney(unitPrice)}`
+        : 'Product details updated',
+      activeChanged
+        ? `Status ${selectedProduct.active ? 'active' : 'inactive'} -> ${
+            productEditDraft.active ? 'active' : 'inactive'
+          }`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('. ')
+
+    const updatedProduct: Product = {
+      ...selectedProduct,
+      active: productEditDraft.active,
+      barcodes,
+      category: productEditDraft.category.trim(),
+      efrisCommodityCode: productEditDraft.efrisCommodityCode.trim(),
+      expiryDate: productEditDraft.expiryDate || undefined,
+      minStock,
+      name: productEditDraft.name.trim(),
+      supplier: productEditDraft.supplier.trim(),
+      taxCategory: productEditDraft.taxCategory.trim(),
+      taxRate: taxRate / 100,
+      unitCost,
+      unitPrice,
+    }
+
+    commitData(
+      (currentData) => ({
+        ...currentData,
+        categories: uniqueList([...currentData.categories, updatedProduct.category]),
+        products: currentData.products.map((product) =>
+          product.id === updatedProduct.id ? updatedProduct : product,
+        ),
+        suppliers: uniqueList([...currentData.suppliers, updatedProduct.supplier]),
+      }),
+      {
+        action: priceChanged ? 'Price updated' : 'Product updated',
+        entity: updatedProduct.name,
+        details,
+      },
+    )
+    setStatus(`${updatedProduct.name} saved.`)
+  }
+
+  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    let user: User | null = null
+
+    if (storageMode === 'sqlite') {
+      const authResult = await authenticateDatabaseUser(loginStaffNumber.trim(), loginPin)
+      user = authResult.user
+    } else {
+      user =
+        data.users.find((candidate) => candidate.staffNumber === loginStaffNumber.trim()) ??
+        null
+    }
+
+    if (!user || !user.active || (storageMode !== 'sqlite' && user.pin !== loginPin)) {
       setStatus('Incorrect staff number, PIN, or inactive user.')
       return
     }
@@ -775,21 +1000,33 @@ function App() {
     setStatus('Logged out.')
   }
 
-  const handleUnlock = (event: FormEvent<HTMLFormElement>) => {
+  const handleUnlock = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
-    if (!sessionUser || unlockPin !== sessionUser.pin) {
+    if (!sessionUser) {
+      setStatus('Log in before unlocking.')
+      return
+    }
+
+    const unlockedUser =
+      storageMode === 'sqlite'
+        ? (await unlockDatabaseUser(sessionUser.id, unlockPin)).user
+        : sessionUser.pin === unlockPin
+          ? sessionUser
+          : null
+
+    if (!unlockedUser) {
       setStatus('Incorrect unlock PIN.')
       return
     }
 
     setIsLocked(false)
     setUnlockPin('')
-    setStatus(`${sessionUser.name} unlocked.`)
+    setStatus(`${unlockedUser.name} unlocked.`)
     setData((currentData) => ({
       ...currentData,
       auditLogs: [
-        makeAudit(sessionUser, 'Session unlocked', sessionUser.name, 'PIN unlock.'),
+        makeAudit(unlockedUser, 'Session unlocked', unlockedUser.name, 'PIN unlock.'),
         ...currentData.auditLogs,
       ],
     }))
@@ -1115,6 +1352,199 @@ function App() {
     setReceivingDraft((draft) => ({ ...draft, barcode }))
     setReceiveScan(barcode)
     setStatus(`Internal barcode generated: ${barcode}.`)
+  }
+
+  const addPurchaseOrderItem = (product: Product) => {
+    const suggestedQuantity = Math.max(product.minStock * 2 - product.stockOnHand, 1)
+
+    setPurchaseSupplier(product.supplier)
+    setPurchaseItems((items) => {
+      const existingItem = items.find((item) => item.productId === product.id)
+
+      if (existingItem) {
+        return items.map((item) =>
+          item.productId === product.id
+            ? {
+                ...item,
+                quantityOrdered: item.quantityOrdered + suggestedQuantity,
+              }
+            : item,
+        )
+      }
+
+      return [
+        ...items,
+        {
+          productId: product.id,
+          productName: product.name,
+          barcode: product.barcodes[0] ?? product.internalBarcode ?? '',
+          quantityOrdered: suggestedQuantity,
+          quantityReceived: 0,
+          unitCost: product.unitCost,
+        },
+      ]
+    })
+    setPurchaseProductSearch('')
+    setStatus(`${product.name} added to supplier order.`)
+  }
+
+  const updatePurchaseItem = (
+    productId: string,
+    field: 'quantityOrdered' | 'unitCost',
+    value: string,
+  ) => {
+    const numberValue = Math.max(Number(value), 0)
+
+    setPurchaseItems((items) =>
+      items.map((item) =>
+        item.productId === productId
+          ? { ...item, [field]: Number.isNaN(numberValue) ? 0 : numberValue }
+          : item,
+      ),
+    )
+  }
+
+  const removePurchaseItem = (productId: string) => {
+    setPurchaseItems((items) => items.filter((item) => item.productId !== productId))
+  }
+
+  const createPurchaseOrder = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    if (!sessionUser || sessionUser.role === 'cashier') {
+      setStatus('Ask a manager or stock administrator to create supplier orders.')
+      return
+    }
+
+    const supplier = purchaseSupplier.trim()
+    const validItems = purchaseItems.filter(
+      (item) => item.quantityOrdered > 0 && item.unitCost >= 0,
+    )
+
+    if (!supplier || validItems.length === 0) {
+      setStatus('Choose a supplier and add at least one product.')
+      return
+    }
+
+    const order: PurchaseOrder = {
+      id: createId('po'),
+      orderNo: createPurchaseOrderNo(data.purchaseOrders.length),
+      supplier,
+      createdAt: new Date().toISOString(),
+      expectedAt: purchaseExpectedAt || undefined,
+      createdById: sessionUser.id,
+      createdByName: sessionUser.name,
+      status: 'sent',
+      items: validItems,
+      total: validItems.reduce((sum, item) => sum + item.quantityOrdered * item.unitCost, 0),
+      invoiceNo: purchaseInvoiceNo.trim() || undefined,
+      notes: purchaseNotes.trim() || undefined,
+    }
+
+    commitData(
+      (currentData) => ({
+        ...currentData,
+        purchaseOrders: [order, ...currentData.purchaseOrders],
+        suppliers: uniqueList([...currentData.suppliers, supplier]),
+      }),
+      {
+        action: 'Purchase order created',
+        entity: order.orderNo,
+        details: `${validItems.length} line(s) ordered from ${supplier}.`,
+      },
+    )
+    setSelectedPurchaseOrderId(order.id)
+    setPurchaseItems([])
+    setPurchaseExpectedAt('')
+    setPurchaseInvoiceNo('')
+    setPurchaseNotes('')
+    setStatus(`${order.orderNo} created for ${supplier}.`)
+  }
+
+  const receivePurchaseOrder = () => {
+    if (!sessionUser || sessionUser.role === 'cashier') {
+      setStatus('Ask a manager or stock administrator to receive supplier orders.')
+      return
+    }
+
+    if (!selectedPurchaseOrder) {
+      setStatus('Select a purchase order first.')
+      return
+    }
+
+    const receivedLines = selectedPurchaseOrder.items
+      .map((item) => {
+        const outstanding = Math.max(item.quantityOrdered - item.quantityReceived, 0)
+        const typedQuantity = Number(purchaseReceiveDraft[item.productId] ?? outstanding)
+        const quantity = Math.min(Math.max(typedQuantity, 0), outstanding)
+
+        return { item, quantity }
+      })
+      .filter((line) => line.quantity > 0)
+
+    if (receivedLines.length === 0) {
+      setStatus('Enter a receiving quantity for at least one order line.')
+      return
+    }
+
+    const movements = receivedLines.map(({ item, quantity }) =>
+      createMovement(
+        sessionUser,
+        item.productId,
+        item.productName,
+        quantity,
+        'purchase',
+        `${selectedPurchaseOrder.orderNo}${purchaseInvoiceNo ? ` / ${purchaseInvoiceNo}` : ''}`,
+      ),
+    )
+
+    commitData(
+      (currentData) => {
+        const receivedByProduct = new Map(
+          receivedLines.map(({ item, quantity }) => [item.productId, quantity]),
+        )
+
+        const purchaseOrders = currentData.purchaseOrders.map((order) => {
+          if (order.id !== selectedPurchaseOrder.id) {
+            return order
+          }
+
+          const items = order.items.map((item) => ({
+            ...item,
+            quantityReceived:
+              item.quantityReceived + (receivedByProduct.get(item.productId) ?? 0),
+          }))
+          const allReceived = items.every(
+            (item) => item.quantityReceived >= item.quantityOrdered,
+          )
+
+          return {
+            ...order,
+            invoiceNo: purchaseInvoiceNo.trim() || order.invoiceNo,
+            status: allReceived ? ('received' as const) : ('part-received' as const),
+            items,
+          }
+        })
+
+        return {
+          ...currentData,
+          products: currentData.products.map((product) => ({
+            ...product,
+            stockOnHand: product.stockOnHand + (receivedByProduct.get(product.id) ?? 0),
+          })),
+          movements: [...movements, ...currentData.movements],
+          purchaseOrders,
+        }
+      },
+      {
+        action: 'Purchase order received',
+        entity: selectedPurchaseOrder.orderNo,
+        details: `${receivedLines.length} line(s) received into stock.`,
+      },
+    )
+    setPurchaseReceiveDraft({})
+    setPurchaseInvoiceNo('')
+    setStatus(`${selectedPurchaseOrder.orderNo} received into stock.`)
   }
 
   const receiveStock = (event: FormEvent<HTMLFormElement>) => {
@@ -2296,93 +2726,459 @@ function App() {
               </form>
             </div>
 
-            <MovementFeed movements={data.movements.slice(0, 8)} />
+            <div className="receiving-side">
+              <section className="report-panel purchase-panel">
+                <div className="section-header">
+                  <div>
+                    <h2>Supplier orders</h2>
+                    <p>{openPurchaseOrders.length} open order(s).</p>
+                  </div>
+                  <b>{formatMoney(purchaseOrderTotal)}</b>
+                </div>
+
+                <form className="stack-form" onSubmit={createPurchaseOrder}>
+                  <DataListInput
+                    label="Supplier"
+                    value={purchaseSupplier}
+                    options={data.suppliers}
+                    onChange={setPurchaseSupplier}
+                  />
+                  <div className="two-column-fields">
+                    <label>
+                      Expected date
+                      <input
+                        type="date"
+                        value={purchaseExpectedAt}
+                        onChange={(event) => setPurchaseExpectedAt(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Invoice no.
+                      <input
+                        value={purchaseInvoiceNo}
+                        onChange={(event) => setPurchaseInvoiceNo(event.target.value)}
+                        placeholder="Optional"
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    Search product
+                    <input
+                      value={purchaseProductSearch}
+                      onChange={(event) => setPurchaseProductSearch(event.target.value)}
+                      placeholder="Name, barcode or supplier"
+                    />
+                  </label>
+                  {purchaseProductSearch && (
+                    <div className="mini-list">
+                      {purchaseProductMatches.length === 0 ? (
+                        <div className="empty-state">No matching active products.</div>
+                      ) : (
+                        purchaseProductMatches.map((product) => (
+                          <button
+                            className="compact-row clickable-row"
+                            type="button"
+                            key={product.id}
+                            onClick={() => addPurchaseOrderItem(product)}
+                          >
+                            <span>
+                              {product.name}
+                              <small>{product.barcodes[0] ?? 'No barcode'}</small>
+                            </span>
+                            <b>{formatMoney(product.unitCost)}</b>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  <div className="mini-list">
+                    {purchaseItems.length === 0 ? (
+                      <div className="empty-state">Add products to create an order.</div>
+                    ) : (
+                      purchaseItems.map((item) => (
+                        <div className="purchase-line" key={item.productId}>
+                          <span>
+                            {item.productName}
+                            <small>{item.barcode}</small>
+                          </span>
+                          <input
+                            inputMode="numeric"
+                            value={String(item.quantityOrdered)}
+                            aria-label={`Quantity for ${item.productName}`}
+                            onChange={(event) =>
+                              updatePurchaseItem(
+                                item.productId,
+                                'quantityOrdered',
+                                event.target.value,
+                              )
+                            }
+                          />
+                          <input
+                            inputMode="numeric"
+                            value={String(item.unitCost)}
+                            aria-label={`Unit cost for ${item.productName}`}
+                            onChange={(event) =>
+                              updatePurchaseItem(
+                                item.productId,
+                                'unitCost',
+                                event.target.value,
+                              )
+                            }
+                          />
+                          <button
+                            className="secondary-action icon-action"
+                            type="button"
+                            onClick={() => removePurchaseItem(item.productId)}
+                            title={`Remove ${item.productName}`}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <label>
+                    Notes
+                    <textarea
+                      value={purchaseNotes}
+                      onChange={(event) => setPurchaseNotes(event.target.value)}
+                      placeholder="Supplier note, payment terms, delivery note"
+                    />
+                  </label>
+                  <button className="primary-action" type="submit">
+                    <PackagePlus size={18} />
+                    Create supplier order
+                  </button>
+                </form>
+              </section>
+
+              <section className="report-panel purchase-panel">
+                <div className="section-header">
+                  <div>
+                    <h2>Receive from order</h2>
+                    <p>{data.purchaseOrders.length} supplier order(s).</p>
+                  </div>
+                </div>
+                {data.purchaseOrders.length === 0 ? (
+                  <div className="empty-state">No supplier orders yet.</div>
+                ) : (
+                  <>
+                    <label>
+                      Open purchase order
+                      <select
+                        value={selectedPurchaseOrder?.id ?? ''}
+                        onChange={(event) => setSelectedPurchaseOrderId(event.target.value)}
+                      >
+                        {data.purchaseOrders.map((order) => (
+                          <option key={order.id} value={order.id}>
+                            {order.orderNo} - {order.supplier} - {order.status}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {selectedPurchaseOrder && (
+                      <div className="mini-list loose">
+                        {selectedPurchaseOrder.items.map((item) => {
+                          const outstanding = Math.max(
+                            item.quantityOrdered - item.quantityReceived,
+                            0,
+                          )
+
+                          return (
+                            <div className="purchase-line receive-line" key={item.productId}>
+                              <span>
+                                {item.productName}
+                                <small>
+                                  {item.quantityReceived} / {item.quantityOrdered} received
+                                </small>
+                              </span>
+                              <input
+                                inputMode="numeric"
+                                value={purchaseReceiveDraft[item.productId] ?? String(outstanding)}
+                                aria-label={`Receive ${item.productName}`}
+                                onChange={(event) =>
+                                  setPurchaseReceiveDraft((draft) => ({
+                                    ...draft,
+                                    [item.productId]: event.target.value,
+                                  }))
+                                }
+                                disabled={outstanding === 0}
+                              />
+                            </div>
+                          )
+                        })}
+                        <button
+                          className="primary-action"
+                          type="button"
+                          onClick={receivePurchaseOrder}
+                          disabled={
+                            selectedPurchaseOrder.status === 'received' ||
+                            selectedPurchaseOrder.status === 'cancelled'
+                          }
+                        >
+                          <ArchiveRestore size={18} />
+                          Receive order stock
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </section>
+
+              <MovementFeed movements={data.movements.slice(0, 8)} />
+            </div>
           </section>
         )}
 
         {activeTab === 'products' && (
-          <section className="screen">
-            <div className="list-toolbar">
-              <div className="search-line">
-                <Search size={19} />
-                <input
-                  value={productSearch}
-                  onChange={(event) => setProductSearch(event.target.value)}
-                  placeholder="Search products, barcode, supplier"
-                  aria-label="Search products"
-                />
+          <section className="screen products-screen">
+            <div className="product-list-zone">
+              <div className="list-toolbar">
+                <div className="search-line">
+                  <Search size={19} />
+                  <input
+                    value={productSearch}
+                    onChange={(event) => setProductSearch(event.target.value)}
+                    placeholder="Search products, barcode, supplier"
+                    aria-label="Search products"
+                  />
+                </div>
+                <div className="list-summary">
+                  <strong>
+                    {productShowingFrom}-{productShowingTo}
+                  </strong>
+                  <span>
+                    of {filteredProducts.length} products / page {safeProductPage} of{' '}
+                    {productPageCount}
+                  </span>
+                </div>
               </div>
-              <div className="list-summary">
-                <strong>
-                  {productShowingFrom}-{productShowingTo}
-                </strong>
-                <span>
-                  of {filteredProducts.length} products / page {safeProductPage} of{' '}
-                  {productPageCount}
-                </span>
+
+              <div className="product-list">
+                <div className="product-table-head">
+                  <span>Product</span>
+                  <span>Barcode</span>
+                  <span>Stock</span>
+                  <span>Cost</span>
+                  <span>Price</span>
+                  <span>Status</span>
+                  <span aria-label="Actions" />
+                </div>
+                {pagedProducts.length === 0 ? (
+                  <div className="empty-state">No products match this search.</div>
+                ) : (
+                  pagedProducts.map((product) => (
+                    <div
+                      className={
+                        product.id === selectedProductId ? 'product-row selected' : 'product-row'
+                      }
+                      key={product.id}
+                      onClick={() => setSelectedProductId(product.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          setSelectedProductId(product.id)
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <span className="product-main-cell">
+                        <strong>{product.name}</strong>
+                        <small>
+                          {product.category} / {product.supplier} / EFRIS{' '}
+                          {product.efrisCommodityCode}
+                        </small>
+                      </span>
+                      <span className="barcode-cell">{product.barcodes.join(', ')}</span>
+                      <b className={product.stockOnHand <= product.minStock ? 'danger-text' : ''}>
+                        {product.stockOnHand}
+                      </b>
+                      <span>{formatMoney(product.unitCost)}</span>
+                      <strong>{formatMoney(product.unitPrice)}</strong>
+                      <span
+                        className={
+                          product.stockOnHand <= product.minStock
+                            ? 'product-status danger-status'
+                            : 'product-status'
+                        }
+                      >
+                        {product.active
+                          ? product.stockOnHand <= product.minStock
+                            ? 'Low stock'
+                            : 'In stock'
+                          : 'Inactive'}
+                      </span>
+                      <button
+                        className="secondary-action compact-action"
+                        type="button"
+                        aria-label={`Print label for ${product.name}`}
+                        title="Print label"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          printLabel(product)
+                        }}
+                      >
+                        <Printer size={18} />
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
+
+              <PaginationControls
+                label="Products"
+                page={safeProductPage}
+                pageCount={productPageCount}
+                onPrevious={() => setProductPage((page) => Math.max(1, page - 1))}
+                onNext={() => setProductPage((page) => Math.min(productPageCount, page + 1))}
+              />
             </div>
 
-            <div className="product-list">
-              <div className="product-table-head">
-                <span>Product</span>
-                <span>Barcode</span>
-                <span>Supplier</span>
-                <span>Stock</span>
-                <span>Cost</span>
-                <span>Price</span>
-                <span>Status</span>
-                <span aria-label="Actions" />
-              </div>
-              {pagedProducts.length === 0 ? (
-                <div className="empty-state">No products match this search.</div>
-              ) : (
-                pagedProducts.map((product) => (
-                  <div className="product-row" key={product.id}>
-                    <span className="product-main-cell">
-                      <strong>{product.name}</strong>
-                      <small>
-                        {product.category} / {product.taxCategory} / EFRIS{' '}
-                        {product.efrisCommodityCode}
-                      </small>
-                    </span>
-                    <span className="barcode-cell">{product.barcodes.join(', ')}</span>
-                    <span>{product.supplier}</span>
-                    <b className={product.stockOnHand <= product.minStock ? 'danger-text' : ''}>
-                      {product.stockOnHand}
-                    </b>
-                    <span>{formatMoney(product.unitCost)}</span>
-                    <strong>{formatMoney(product.unitPrice)}</strong>
-                    <span
-                      className={
-                        product.stockOnHand <= product.minStock
-                          ? 'product-status danger-status'
-                          : 'product-status'
+            <aside className="report-panel product-editor-panel">
+              <h2>Product management</h2>
+              {selectedProduct ? (
+                sessionUser?.role === 'cashier' ? (
+                  <div className="selected-account">
+                    <span>Selected product</span>
+                    <strong>{selectedProduct.name}</strong>
+                    <span>Stock</span>
+                    <b>{selectedProduct.stockOnHand}</b>
+                    <span>Price</span>
+                    <b>{formatMoney(selectedProduct.unitPrice)}</b>
+                    <span>Status</span>
+                    <b>{selectedProduct.active ? 'Active' : 'Inactive'}</b>
+                  </div>
+                ) : (
+                  <div className="stack-form">
+                    <label>
+                      Product name
+                      <input
+                        value={productEditDraft.name}
+                        onChange={(event) =>
+                          setProductEditDraft((draft) => ({
+                            ...draft,
+                            name: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Barcodes
+                      <input
+                        value={productEditDraft.barcodes}
+                        onChange={(event) =>
+                          setProductEditDraft((draft) => ({
+                            ...draft,
+                            barcodes: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <DataListInput
+                      label="Category"
+                      value={productEditDraft.category}
+                      options={data.categories}
+                      onChange={(value) =>
+                        setProductEditDraft((draft) => ({ ...draft, category: value }))
                       }
-                    >
-                      {product.stockOnHand <= product.minStock ? 'Low stock' : 'In stock'}
-                    </span>
-                    <button
-                      className="secondary-action compact-action"
-                      type="button"
-                      aria-label={`Print label for ${product.name}`}
-                      title="Print label"
-                      onClick={() => printLabel(product)}
-                    >
-                      <Printer size={18} />
+                    />
+                    <DataListInput
+                      label="Supplier"
+                      value={productEditDraft.supplier}
+                      options={data.suppliers}
+                      onChange={(value) =>
+                        setProductEditDraft((draft) => ({ ...draft, supplier: value }))
+                      }
+                    />
+                    <NumberInput
+                      label="Buying price"
+                      value={productEditDraft.unitCost}
+                      onChange={(value) =>
+                        setProductEditDraft((draft) => ({ ...draft, unitCost: value }))
+                      }
+                    />
+                    <NumberInput
+                      label="Selling price"
+                      value={productEditDraft.unitPrice}
+                      onChange={(value) =>
+                        setProductEditDraft((draft) => ({ ...draft, unitPrice: value }))
+                      }
+                    />
+                    <NumberInput
+                      label="Tax %"
+                      value={productEditDraft.taxRate}
+                      onChange={(value) =>
+                        setProductEditDraft((draft) => ({ ...draft, taxRate: value }))
+                      }
+                    />
+                    <label>
+                      Tax category
+                      <input
+                        value={productEditDraft.taxCategory}
+                        onChange={(event) =>
+                          setProductEditDraft((draft) => ({
+                            ...draft,
+                            taxCategory: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      EFRIS commodity code
+                      <input
+                        value={productEditDraft.efrisCommodityCode}
+                        onChange={(event) =>
+                          setProductEditDraft((draft) => ({
+                            ...draft,
+                            efrisCommodityCode: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <NumberInput
+                      label="Minimum stock"
+                      value={productEditDraft.minStock}
+                      onChange={(value) =>
+                        setProductEditDraft((draft) => ({ ...draft, minStock: value }))
+                      }
+                    />
+                    <label>
+                      Expiry date
+                      <input
+                        type="date"
+                        value={productEditDraft.expiryDate}
+                        onChange={(event) =>
+                          setProductEditDraft((draft) => ({
+                            ...draft,
+                            expiryDate: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="toggle-line">
+                      <input
+                        checked={productEditDraft.active}
+                        type="checkbox"
+                        onChange={(event) =>
+                          setProductEditDraft((draft) => ({
+                            ...draft,
+                            active: event.target.checked,
+                          }))
+                        }
+                      />
+                      Active product
+                    </label>
+                    <button className="primary-action" type="button" onClick={saveProductEdit}>
+                      <PackagePlus size={18} />
+                      Save product
                     </button>
                   </div>
-                ))
+                )
+              ) : (
+                <div className="empty-state">Select a product to manage.</div>
               )}
-            </div>
-
-            <PaginationControls
-              label="Products"
-              page={safeProductPage}
-              pageCount={productPageCount}
-              onPrevious={() => setProductPage((page) => Math.max(1, page - 1))}
-              onNext={() => setProductPage((page) => Math.min(productPageCount, page + 1))}
-            />
+            </aside>
           </section>
         )}
 
@@ -2882,6 +3678,10 @@ function App() {
                       <DatabaseBackup size={18} />
                       Stock movement CSV
                     </button>
+                    <button className="secondary-action" type="button" onClick={exportPurchaseOrdersReport}>
+                      <DatabaseBackup size={18} />
+                      Purchase orders CSV
+                    </button>
                     <button className="secondary-action" type="button" onClick={exportLowStockExpiryReport}>
                       <DatabaseBackup size={18} />
                       Low stock / expiry CSV
@@ -3371,7 +4171,9 @@ function LoginScreen({
             .filter((user) => user.active)
             .map((user) => (
               <span key={user.id}>
-                {user.staffNumber} / {user.pin} - {user.name}
+                {user.pin
+                  ? `${user.staffNumber} / ${user.pin} - ${user.name}`
+                  : `${user.staffNumber} - ${user.name}`}
               </span>
             ))}
         </div>

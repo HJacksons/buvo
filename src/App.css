@@ -748,13 +748,22 @@ label,
   background: var(--panel);
 }
 
+.products-screen {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  align-items: start;
+}
+
+.product-list-zone {
+  min-width: 0;
+}
+
 .product-table-head,
 .product-row {
   display: grid;
-  grid-template-columns:
-    minmax(190px, 1.4fr) minmax(150px, 1fr) minmax(140px, 1fr) 70px 92px 96px 92px
-    42px;
-  gap: 12px;
+  grid-template-columns: minmax(130px, 1.5fr) minmax(90px, 0.95fr) 46px 58px 62px 74px 38px;
+  gap: 10px;
   align-items: center;
 }
 
@@ -772,10 +781,16 @@ label,
   min-height: 70px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
+  cursor: pointer;
 }
 
 .product-row:last-child {
   border-bottom: 0;
+}
+
+.product-row.selected {
+  background: #edf7f1;
+  box-shadow: inset 4px 0 0 #2f7d54;
 }
 
 .product-row span,
@@ -814,6 +829,23 @@ label,
 .product-status.danger-status {
   color: #8a1c14;
   background: #ffede9;
+}
+
+.product-editor-panel {
+  position: sticky;
+  top: 18px;
+}
+
+.toggle-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+}
+
+.toggle-line input {
+  width: 18px;
+  height: 18px;
 }
 
 .compact-action {
@@ -1230,6 +1262,62 @@ dd {
   gap: 10px;
 }
 
+.receiving-side {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.purchase-panel textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.two-column-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.purchase-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 74px 92px 42px;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  background: #ffffff;
+}
+
+.purchase-line.receive-line {
+  grid-template-columns: minmax(0, 1fr) 84px;
+}
+
+.purchase-line span {
+  min-width: 0;
+  font-weight: 900;
+}
+
+.purchase-line small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.purchase-line input {
+  min-width: 0;
+  padding: 9px 8px;
+}
+
+.clickable-row {
+  width: 100%;
+  border: 1px solid var(--line);
+  text-align: left;
+  cursor: pointer;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -1385,6 +1473,7 @@ dd {
   }
 
   .checkout-grid,
+  .products-screen,
   .receiving-grid,
   .inventory-grid,
   .returns-grid,

@@ -1,4 +1,4 @@
-import type { AppData } from '../domain/types'
+import type { AppData, User } from '../domain/types'
 import { initialData } from './seed'
 
 const STORAGE_KEY = 'buvo-pos-store-v3'
@@ -27,6 +27,11 @@ type SaveResult = {
   storage: 'browser' | 'sqlite' | 'unavailable'
 }
 
+type AuthResult = {
+  message: string
+  user: User | null
+}
+
 const appDataKeys: Array<keyof AppData> = [
   'products',
   'movements',
@@ -35,12 +40,14 @@ const appDataKeys: Array<keyof AppData> = [
   'shifts',
   'debtors',
   'debtTransactions',
+  'purchaseOrders',
   'users',
   'auditLogs',
   'efrisTransactions',
   'categories',
   'suppliers',
 ]
+const legacyRequiredDataKeys = appDataKeys.filter((key) => key !== 'purchaseOrders')
 
 const getFallbackStaffNumber = (userId: string, index: number) => {
   const knownNumbers: Record<string, string> = {
@@ -57,7 +64,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
 const isAppData = (value: unknown): value is AppData =>
-  isObject(value) && appDataKeys.every((key) => Array.isArray(value[key]))
+  isObject(value) && legacyRequiredDataKeys.every((key) => Array.isArray(value[key]))
 
 export const normalizeAppData = (storedData: AppData): AppData => {
   const shouldSeedDebtors =
@@ -76,6 +83,7 @@ export const normalizeAppData = (storedData: AppData): AppData => {
     ...storedData,
     debtors: storedDebtors,
     debtTransactions: [...missingDemoDebtTransactions, ...storedDebtTransactions],
+    purchaseOrders: storedData.purchaseOrders ?? [],
     users: storedData.users.map((user, index) => ({
       ...user,
       staffNumber: user.staffNumber ?? getFallbackStaffNumber(user.id, index),
@@ -276,3 +284,44 @@ export const saveDatabaseData = async (data: AppData): Promise<SaveResult> => {
     }
   }
 }
+
+const authenticate = async (
+  endpoint: 'login' | 'unlock',
+  body: Record<string, string>,
+): Promise<AuthResult> => {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/auth/${endpoint}`, {
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    })
+
+    if (!response.ok) {
+      return {
+        message:
+          endpoint === 'login'
+            ? 'Incorrect staff number, PIN, or inactive user.'
+            : 'Incorrect unlock PIN.',
+        user: null,
+      }
+    }
+
+    const payload = (await response.json()) as { user?: User }
+
+    return {
+      message: 'Authenticated by SQLite database.',
+      user: payload.user ?? null,
+    }
+  } catch {
+    return {
+      message: 'SQLite auth unavailable.',
+      user: null,
+    }
+  }
+}
+
+export const authenticateDatabaseUser = (staffNumber: string, pin: string) =>
+  authenticate('login', { pin, staffNumber })
+
+export const unlockDatabaseUser = (userId: string, pin: string) =>
+  authenticate('unlock', { pin, userId })
