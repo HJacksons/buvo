@@ -5,9 +5,20 @@ const path = require('node:path')
 const port = process.env.BUVO_API_PORT || '8787'
 const apiUrl = `http://127.0.0.1:${port}`
 const devRendererUrl = process.env.BUVO_ELECTRON_RENDERER_URL
+const rendererOrigin = new URL(devRendererUrl || apiUrl).origin
 
 let mainWindow = null
 let apiProcess = null
+
+const isCustomerDisplayUrl = (urlToOpen) => {
+  try {
+    const parsedUrl = new URL(urlToOpen)
+
+    return parsedUrl.origin === rendererOrigin && parsedUrl.searchParams.get('display') === 'customer'
+  } catch {
+    return false
+  }
+}
 
 const waitForApi = async () => {
   for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -65,6 +76,25 @@ const createWindow = async () => {
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isCustomerDisplayUrl(url)) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          backgroundColor: '#f8faf6',
+          height: 720,
+          minHeight: 620,
+          minWidth: 760,
+          title: 'BUVO Customer Display',
+          width: 980,
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+          },
+        },
+      }
+    }
+
     void shell.openExternal(url)
 
     return { action: 'deny' }

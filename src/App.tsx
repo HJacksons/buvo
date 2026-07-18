@@ -2401,11 +2401,21 @@ function App() {
     }
 
     window.localStorage.setItem(CUSTOMER_DISPLAY_KEY, JSON.stringify(customerDisplayPayload))
-    window.open(
-      `${window.location.origin}${window.location.pathname}?display=customer`,
+    const displayUrl = new URL(window.location.href)
+    displayUrl.searchParams.set('display', 'customer')
+    displayUrl.hash = ''
+
+    const displayWindow = window.open(
+      displayUrl.toString(),
       'buvo-customer-display',
       'popup,width=980,height=720',
     )
+
+    if (!displayWindow) {
+      setStatus('Customer display was blocked. Allow popups for BUVO POS and try again.')
+      return
+    }
+
     setStatus('Customer display opened. Move that window to the customer screen.')
   }
 
