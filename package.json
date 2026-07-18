@@ -12,10 +12,11 @@
     "dev": "vite",
     "dev:api": "tsx watch server/index.ts",
     "desktop:dev": "concurrently -k \"npm run api\" \"npm run dev -- --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 http://127.0.0.1:8787/api/health && BUVO_ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
-    "desktop:dist": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
-    "desktop:pack": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
+    "desktop:dist": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder && npm run rebuild:node-native",
+    "desktop:pack": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir && npm run rebuild:node-native",
     "build": "tsc -b && vite build && npm run build:server",
     "lint": "oxlint",
+    "rebuild:node-native": "npm rebuild better-sqlite3",
     "test": "node --test --import tsx tests/*.test.ts",
     "preview": "vite preview"
   },

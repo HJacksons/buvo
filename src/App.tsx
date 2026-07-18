@@ -577,6 +577,10 @@ function App() {
     activityPageStart + ACTIVITY_PAGE_SIZE,
     filteredActivityLogs.length,
   )
+  const canViewProductCost =
+    sessionUser?.role === 'owner' ||
+    sessionUser?.role === 'manager' ||
+    sessionUser?.role === 'stock-admin'
 
   const commitData = (
     updater: (currentData: AppData) => AppData,
@@ -2966,13 +2970,17 @@ function App() {
                 </div>
               </div>
 
-              <div className="product-list">
+              <div
+                className={`product-list ${
+                  canViewProductCost ? 'cost-visible' : 'cost-hidden'
+                }`}
+              >
                 <div className="product-table-head">
                   <span>Product</span>
                   <span>Barcode</span>
-                  <span>Stock</span>
-                  <span>Cost</span>
-                  <span>Price</span>
+                  <span className="numeric-head">Stock</span>
+                  {canViewProductCost && <span className="numeric-head">Buying cost</span>}
+                  <span className="numeric-head">Selling price</span>
                   <span>Status</span>
                   <span aria-label="Actions" />
                 </div>
@@ -3002,17 +3010,29 @@ function App() {
                         </small>
                       </span>
                       <span className="barcode-cell">{product.barcodes.join(', ')}</span>
-                      <b className={product.stockOnHand <= product.minStock ? 'danger-text' : ''}>
+                      <b
+                        className={`stock-cell ${
+                          product.stockOnHand <= product.minStock ? 'danger-text' : ''
+                        }`}
+                        data-label="Stock"
+                      >
                         {product.stockOnHand}
                       </b>
-                      <span>{formatMoney(product.unitCost)}</span>
-                      <strong>{formatMoney(product.unitPrice)}</strong>
+                      {canViewProductCost && (
+                        <span className="money-cell cost-cell" data-label="Buying cost">
+                          {formatMoney(product.unitCost)}
+                        </span>
+                      )}
+                      <strong className="money-cell price-cell" data-label="Selling price">
+                        {formatMoney(product.unitPrice)}
+                      </strong>
                       <span
                         className={
                           product.stockOnHand <= product.minStock
                             ? 'product-status danger-status'
                             : 'product-status'
                         }
+                        data-label="Status"
                       >
                         {product.active
                           ? product.stockOnHand <= product.minStock

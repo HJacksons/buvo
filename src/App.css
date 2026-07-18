@@ -762,9 +762,21 @@ label,
 .product-table-head,
 .product-row {
   display: grid;
-  grid-template-columns: minmax(130px, 1.5fr) minmax(90px, 0.95fr) 46px 58px 62px 74px 38px;
-  gap: 10px;
+  gap: 14px;
   align-items: center;
+}
+
+.product-list.cost-visible .product-table-head,
+.product-list.cost-visible .product-row {
+  grid-template-columns:
+    minmax(170px, 1.5fr) minmax(120px, 0.95fr) 58px 104px 112px minmax(86px, auto)
+    42px;
+}
+
+.product-list.cost-hidden .product-table-head,
+.product-list.cost-hidden .product-row {
+  grid-template-columns:
+    minmax(190px, 1.7fr) minmax(130px, 1fr) 64px 118px minmax(86px, auto) 42px;
 }
 
 .product-table-head {
@@ -775,6 +787,12 @@ label,
   font-size: 12px;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+.product-table-head .numeric-head,
+.product-row .stock-cell,
+.product-row .money-cell {
+  text-align: right;
 }
 
 .product-row {
@@ -794,8 +812,18 @@ label,
 }
 
 .product-row span,
+.product-row .stock-cell,
 .product-main-cell small {
   color: var(--muted);
+}
+
+.product-row .price-cell {
+  color: var(--ink);
+}
+
+.product-row .cost-cell {
+  color: #5f685f;
+  font-weight: 800;
 }
 
 .product-main-cell strong,
@@ -1565,7 +1593,7 @@ dd {
   .product-row {
     border: 1px solid var(--line);
     border-radius: 8px;
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
     gap: 8px;
     background: var(--panel);
   }
@@ -1585,20 +1613,8 @@ dd {
     content: "Barcode";
   }
 
-  .product-row > span:nth-child(3)::before {
-    content: "Supplier";
-  }
-
-  .product-row > b::before {
-    content: "Stock";
-  }
-
-  .product-row > span:nth-child(5)::before {
-    content: "Cost";
-  }
-
-  .product-row > strong:nth-child(6)::before {
-    content: "Price";
+  .product-row > [data-label]::before {
+    content: attr(data-label);
   }
 
   .pagination,
