@@ -311,6 +311,8 @@ function App() {
   const [lastCustomerItem, setLastCustomerItem] =
     useState<CustomerDisplayPayload['lastItem']>()
   const [labelProduct, setLabelProduct] = useState<Product | null>(null)
+  const [printMode, setPrintMode] = useState<'receipt' | 'label' | null>(null)
+  const [printReceiptAfterSale, setPrintReceiptAfterSale] = useState(true)
   const [lastScanAt, setLastScanAt] = useState<string | null>(null)
   const [lastPrintAt, setLastPrintAt] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -1410,9 +1412,22 @@ function App() {
       },
     )
     setLastSale(sale)
+    setLabelProduct(null)
     setCart([])
     setPayments([])
     setPaymentReference('')
+
+    if (printReceiptAfterSale) {
+      setPrintMode('receipt')
+      window.setTimeout(() => {
+        window.print()
+        setLastPrintAt(new Date().toISOString())
+      }, 60)
+      setStatus(`${sale.receiptNo} completed. Receipt print dialog opened.`)
+      return
+    }
+
+    setPrintMode(null)
     setStatus(
       creditAmount > 0 && selectedDebtor
         ? `${sale.receiptNo} completed; ${selectedDebtor.name} owes ${formatMoney(
@@ -2381,13 +2396,18 @@ function App() {
       return
     }
 
-    window.print()
-    setLastPrintAt(new Date().toISOString())
+    setLabelProduct(null)
+    setPrintMode('receipt')
+    window.setTimeout(() => {
+      window.print()
+      setLastPrintAt(new Date().toISOString())
+    }, 60)
     setStatus(`${lastSale.receiptNo} sent to browser print dialog.`)
   }
 
   const printLabel = (product: Product) => {
     setLabelProduct(product)
+    setPrintMode('label')
     window.setTimeout(() => {
       window.print()
       setLastPrintAt(new Date().toISOString())
@@ -2418,6 +2438,35 @@ function App() {
 
     setStatus('Customer display opened. Move that window to the customer screen.')
   }
+
+  useEffect(() => {
+    if (isCustomerDisplay || activeTab !== 'checkout' || !sessionUser || isLocked) {
+      return
+    }
+
+    const handleCheckoutShortcut = (event: KeyboardEvent) => {
+      if (event.key === 'F9') {
+        event.preventDefault()
+        completeSale()
+      }
+
+      if (event.key === 'F10') {
+        event.preventDefault()
+        printReceipt()
+      }
+
+      if (event.key === 'F8') {
+        event.preventDefault()
+        openCustomerDisplay()
+      }
+    }
+
+    window.addEventListener('keydown', handleCheckoutShortcut)
+
+    return () => {
+      window.removeEventListener('keydown', handleCheckoutShortcut)
+    }
+  })
 
   if (isCustomerDisplay) {
     return <CustomerDisplay />
@@ -2703,20 +2752,51 @@ function App() {
                 </div>
               )}
 
-              <button className="primary-action" type="button" onClick={completeSale}>
-                <ReceiptText size={19} />
-                Complete sale
-              </button>
+              <div className="receipt-option">
+                <label>
+                  <input
+                    checked={printReceiptAfterSale}
+                    type="checkbox"
+                    onChange={(event) => setPrintReceiptAfterSale(event.target.checked)}
+                  />
+                  Print receipt after sale
+                </label>
+                <small>F9 finish, F10 reprint</small>
+              </div>
 
-              <button className="secondary-action" type="button" onClick={printReceipt}>
-                <Printer size={18} />
-                Print receipt
-              </button>
+              <div className="checkout-actions">
+                <button
+                  className="primary-action sale-action"
+                  type="button"
+                  onClick={completeSale}
+                >
+                  <ReceiptText size={20} />
+                  <span>{printReceiptAfterSale ? 'Complete & print' : 'Complete sale'}</span>
+                  <kbd>F9</kbd>
+                </button>
 
-              <button className="secondary-action" type="button" onClick={openCustomerDisplay}>
-                <ExternalLink size={18} />
-                Customer display
-              </button>
+                <div className="checkout-action-grid">
+                  <button
+                    className="secondary-action action-tile"
+                    type="button"
+                    onClick={printReceipt}
+                  >
+                    <Printer size={19} />
+                    <span>Receipt</span>
+                    <kbd>F10</kbd>
+                  </button>
+
+                  <button
+                    className="secondary-action action-tile"
+                    type="button"
+                    onClick={openCustomerDisplay}
+                  >
+                    <ExternalLink size={19} />
+                    <span>Display</span>
+                    <kbd>F8</kbd>
+                  </button>
+                </div>
+              </div>
 
               {lastSale && <ReceiptPreview sale={lastSale} />}
             </aside>
@@ -4230,8 +4310,8 @@ function App() {
         )}
 
         <div className="print-zone">
-          {lastSale && <PrintableReceipt sale={lastSale} />}
-          {labelProduct && <PrintableLabel product={labelProduct} />}
+          {printMode === 'receipt' && lastSale && <PrintableReceipt sale={lastSale} />}
+          {printMode === 'label' && labelProduct && <PrintableLabel product={labelProduct} />}
         </div>
       </section>
     </main>

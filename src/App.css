@@ -630,6 +630,82 @@ dt {
   grid-column: 1 / -1;
 }
 
+.receipt-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.receipt-option label {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.receipt-option input {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  accent-color: #2f7d54;
+}
+
+.receipt-option small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.checkout-actions {
+  display: grid;
+  gap: 9px;
+}
+
+.sale-action {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  justify-items: center;
+  width: 100%;
+}
+
+.checkout-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.action-tile {
+  min-height: 72px;
+  display: grid;
+  grid-template-rows: auto auto auto;
+  gap: 4px;
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.sale-action span,
+.action-tile span {
+  min-width: 0;
+}
+
+kbd {
+  border: 1px solid rgba(16, 43, 29, 0.16);
+  border-radius: 5px;
+  padding: 2px 6px;
+  color: #214936;
+  background: rgba(255, 255, 255, 0.62);
+  font: 800 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .customer-display-shell {
   min-height: 100vh;
   padding: 28px;
@@ -1735,6 +1811,8 @@ dd {
   .product-form,
   .payment-grid,
   .payment-entry,
+  .receipt-option,
+  .checkout-action-grid,
   .list-toolbar,
   .panel-heading,
   .receipt-row,

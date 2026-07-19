@@ -54,6 +54,10 @@ From Checkout, click `Customer display` and move the opened window to the custom
 
 The customer display intentionally shows only customer-safe information: item name, barcode, quantity, selling price, discount, VAT estimate, amount due, paid amount, change, and receipt number after payment. It does not show buying cost, profit, supplier cost, admin panels, debtor lists, or cashier controls.
 
+## Checkout shortcuts
+
+Checkout is set up for fast counter work. `F9` completes the sale and prints immediately when `Print receipt after sale` is on. Cashiers can turn that option off for customers who do not need a receipt. `F10` reprints the last receipt, and `F8` opens the customer display.
+
 ## Demo logins
 
 - Cashier: staff number `1001`, PIN `1234`
