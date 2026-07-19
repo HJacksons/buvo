@@ -114,6 +114,9 @@ const DEBT_ACTIVITY_PAGE_SIZE = 10
 const PURCHASE_PICK_LIMIT = 5
 const CUSTOMER_DISPLAY_CHANNEL = 'buvo-customer-display'
 const CUSTOMER_DISPLAY_KEY = 'buvo-customer-display-state'
+const isShortcutModifier = (event: KeyboardEvent) => event.ctrlKey || event.metaKey
+const isModifiedShortcut = (event: KeyboardEvent, key: string) =>
+  isShortcutModifier(event) && !event.altKey && event.key.toLowerCase() === key
 
 const emptyReceivingDraft = (barcode = ''): ReceivingDraft => ({
   barcode,
@@ -2445,17 +2448,19 @@ function App() {
     }
 
     const handleCheckoutShortcut = (event: KeyboardEvent) => {
-      if (event.key === 'F9') {
+      if (event.key === 'F9' || (isShortcutModifier(event) && event.key === 'Enter')) {
         event.preventDefault()
         completeSale()
+        return
       }
 
-      if (event.key === 'F10') {
+      if (event.key === 'F10' || isModifiedShortcut(event, 'p')) {
         event.preventDefault()
         printReceipt()
+        return
       }
 
-      if (event.key === 'F8') {
+      if (event.key === 'F8' || isModifiedShortcut(event, 'd')) {
         event.preventDefault()
         openCustomerDisplay()
       }
@@ -2761,7 +2766,7 @@ function App() {
                   />
                   Print receipt after sale
                 </label>
-                <small>F9 finish, F10 reprint</small>
+                <small>F9 or Ctrl+Enter</small>
               </div>
 
               <div className="checkout-actions">
@@ -2772,7 +2777,7 @@ function App() {
                 >
                   <ReceiptText size={20} />
                   <span>{printReceiptAfterSale ? 'Complete & print' : 'Complete sale'}</span>
-                  <kbd>F9</kbd>
+                  <kbd>Ctrl+Enter</kbd>
                 </button>
 
                 <div className="checkout-action-grid">
@@ -2783,7 +2788,7 @@ function App() {
                   >
                     <Printer size={19} />
                     <span>Receipt</span>
-                    <kbd>F10</kbd>
+                    <kbd>Ctrl+P</kbd>
                   </button>
 
                   <button
@@ -2793,7 +2798,7 @@ function App() {
                   >
                     <ExternalLink size={19} />
                     <span>Display</span>
-                    <kbd>F8</kbd>
+                    <kbd>Ctrl+D</kbd>
                   </button>
                 </div>
               </div>

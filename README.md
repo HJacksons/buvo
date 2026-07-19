@@ -56,7 +56,9 @@ The customer display intentionally shows only customer-safe information: item na
 
 ## Checkout shortcuts
 
-Checkout is set up for fast counter work. `F9` completes the sale and prints immediately when `Print receipt after sale` is on. Cashiers can turn that option off for customers who do not need a receipt. `F10` reprints the last receipt, and `F8` opens the customer display.
+Checkout is set up for fast counter work. `Ctrl+Enter` or `Cmd+Enter` completes the sale and prints immediately when `Print receipt after sale` is on. Cashiers can turn that option off for customers who do not need a receipt. `Ctrl+P` or `Cmd+P` reprints the last receipt, and `Ctrl+D` or `Cmd+D` opens the customer display.
+
+`F9`, `F10`, and `F8` are also supported for Windows keyboards and programmable POS keyboards. On Mac, those function keys may be captured by macOS unless the keyboard is configured to use standard function keys.
 
 ## Demo logins
 
